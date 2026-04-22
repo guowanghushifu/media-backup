@@ -250,10 +250,11 @@ func (s *Service) processFile(ctx context.Context, job *jobRuntime, path string)
 
 	wasQueued := s.isJobReady(job.key)
 	s.scheduler.MarkDirty(job.key)
+	isQueued := s.isJobReady(job.key)
 	if wasActive && !wasDirtyDuringRun {
 		s.appendSchedulerEventNow(job, "检测到新文件，任务保持运行中，完成后将重新排队")
 	}
-	if !wasActive && !wasQueued {
+	if !wasActive && !wasQueued && isQueued {
 		s.appendSchedulerEventNow(job, "检测到新文件，任务标记为待上传")
 	}
 	s.signalWake()

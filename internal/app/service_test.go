@@ -381,6 +381,49 @@ func TestProcessFileRecordsQueueEventOnceForIdleJob(t *testing.T) {
 	}
 }
 
+func TestProcessFileDoesNotRecordQueueEventWhilePendingRetry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	path := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir}
+	s := &Service{
+		cfg:       &config.Config{StableDuration: time.Millisecond, PollInterval: time.Millisecond, Extensions: []string{".mkv"}},
+		logger:    log.New(io.Discard, "", 0),
+		scheduler: queue.New(queue.Options{MaxParallel: 1}),
+		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
+		retryDue:  map[string]time.Time{},
+		wakeCh:    make(chan struct{}, 1),
+		now: func() time.Time {
+			return time.Date(2026, 4, 23, 10, 0, 8, 0, time.UTC)
+		},
+	}
+
+	s.scheduler.MarkDirty(job.SourceDir)
+	if !s.scheduler.TryStart(job.SourceDir) {
+		t.Fatal("TryStart() = false, want true")
+	}
+	s.scheduler.FinishFailed(job.SourceDir)
+
+	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
+
+	if len(s.recentEvents) != 0 {
+		t.Fatalf("len(recentEvents) = %d, want 0", len(s.recentEvents))
+	}
+	if ready := s.scheduler.Ready(); len(ready) != 0 {
+		t.Fatalf("Ready() = %v, want [] while pending retry", ready)
+	}
+}
+
 func TestProcessFileRecordsRerunEventOnceForActiveJob(t *testing.T) {
 	t.Parallel()
 
