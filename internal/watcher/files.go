@@ -1,18 +1,25 @@
 package watcher
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
 )
 
 func LinkFile(sourceDir, linkDir, sourceFile string) (string, error) {
-	sourcePath := filepath.Join(sourceDir, sourceFile)
-	linkPath := filepath.Join(linkDir, sourceFile)
+	rel, err := filepath.Rel(sourceDir, sourceFile)
+	if err != nil {
+		return "", err
+	}
+	linkPath := filepath.Join(linkDir, rel)
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.Link(sourcePath, linkPath); err != nil {
+	if err := os.Link(sourceFile, linkPath); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return linkPath, nil
+		}
 		return "", err
 	}
 	return linkPath, nil

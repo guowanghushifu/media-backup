@@ -12,8 +12,7 @@ func TestLinkFileCreatesParentDirectories(t *testing.T) {
 
 	sourceDir := t.TempDir()
 	linkDir := t.TempDir()
-	sourceFile := filepath.Join("show", "season-1", "episode-1.mkv")
-	sourcePath := filepath.Join(sourceDir, sourceFile)
+	sourcePath := filepath.Join(sourceDir, "show", "season-1", "episode-1.mkv")
 	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
 		t.Fatalf("MkdirAll source: %v", err)
 	}
@@ -21,12 +20,16 @@ func TestLinkFileCreatesParentDirectories(t *testing.T) {
 		t.Fatalf("WriteFile source: %v", err)
 	}
 
-	linkPath, err := LinkFile(sourceDir, linkDir, sourceFile)
+	linkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("LinkFile() error = %v", err)
 	}
 
-	wantPath := filepath.Join(linkDir, sourceFile)
+	rel, err := filepath.Rel(sourceDir, sourcePath)
+	if err != nil {
+		t.Fatalf("Rel source: %v", err)
+	}
+	wantPath := filepath.Join(linkDir, rel)
 	if linkPath != wantPath {
 		t.Fatalf("LinkFile() path = %q, want %q", linkPath, wantPath)
 	}
@@ -40,6 +43,41 @@ func TestLinkFileCreatesParentDirectories(t *testing.T) {
 		t.Fatalf("Stat source: %v", err)
 	}
 	linkInfo, err := os.Stat(linkPath)
+	if err != nil {
+		t.Fatalf("Stat link: %v", err)
+	}
+	if !os.SameFile(sourceInfo, linkInfo) {
+		t.Fatal("link target is not a hard link to source")
+	}
+}
+
+func TestLinkFileIsIdempotentWhenTargetExists(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := t.TempDir()
+	linkDir := t.TempDir()
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.WriteFile(sourcePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("WriteFile source: %v", err)
+	}
+
+	firstLinkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("first LinkFile() error = %v", err)
+	}
+	secondLinkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("second LinkFile() error = %v", err)
+	}
+	if secondLinkPath != firstLinkPath {
+		t.Fatalf("second LinkFile() path = %q, want %q", secondLinkPath, firstLinkPath)
+	}
+
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("Stat source: %v", err)
+	}
+	linkInfo, err := os.Stat(firstLinkPath)
 	if err != nil {
 		t.Fatalf("Stat link: %v", err)
 	}
@@ -94,42 +132,42 @@ func TestWaitStableReturnsAfterSizeStopsChanging(t *testing.T) {
 
 	stableFor := 80 * time.Millisecond
 	pollInterval := 10 * time.Millisecond
-	done := make(chan time.Time, 1)
+	lastWriteDone := make(chan time.Time, 1)
+	writeErr := make(chan error, 1)
 
 	go func() {
-		defer close(done)
 		time.Sleep(20 * time.Millisecond)
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 		if err != nil {
-			t.Errorf("OpenFile first append: %v", err)
+			writeErr <- err
 			return
 		}
 		if _, err := f.Write([]byte("a")); err != nil {
 			_ = f.Close()
-			t.Errorf("Write first append: %v", err)
+			writeErr <- err
 			return
 		}
 		if err := f.Close(); err != nil {
-			t.Errorf("Close first append: %v", err)
+			writeErr <- err
 			return
 		}
 
 		time.Sleep(20 * time.Millisecond)
 		f, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 		if err != nil {
-			t.Errorf("OpenFile second append: %v", err)
+			writeErr <- err
 			return
 		}
 		if _, err := f.Write([]byte("b")); err != nil {
 			_ = f.Close()
-			t.Errorf("Write second append: %v", err)
+			writeErr <- err
 			return
 		}
 		if err := f.Close(); err != nil {
-			t.Errorf("Close second append: %v", err)
+			writeErr <- err
 			return
 		}
-		done <- time.Now()
+		lastWriteDone <- time.Now()
 	}()
 
 	if err := WaitStable(path, stableFor, pollInterval); err != nil {
@@ -137,11 +175,27 @@ func TestWaitStableReturnsAfterSizeStopsChanging(t *testing.T) {
 	}
 
 	returnedAt := time.Now()
-	var lastWriteAt time.Time
+	var (
+		lastWriteAt time.Time
+		gotWriteAt  bool
+	)
 	select {
-	case lastWriteAt = <-done:
+	case lastWriteAt = <-lastWriteDone:
+		gotWriteAt = true
+	case err := <-writeErr:
+		t.Fatalf("writer goroutine error: %v", err)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("timed out waiting for writer goroutine")
+	}
+
+	if !gotWriteAt {
+		t.Fatal("writer did not report completion")
+	}
+
+	select {
+	case err := <-writeErr:
+		t.Fatalf("writer goroutine error: %v", err)
 	default:
-		t.Fatal("WaitStable() returned before file writes finished")
 	}
 
 	if returnedAt.Sub(lastWriteAt) < stableFor-15*time.Millisecond {
