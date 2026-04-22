@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wangdazhuo/media-backup/internal/ui"
+	"github.com/guowanghushifu/media-backup/internal/ui"
 )
 
 func TestRenderIdle(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/wangdazhuo/media-backup
+module github.com/guowanghushifu/media-backup
 
 go 1.22
 

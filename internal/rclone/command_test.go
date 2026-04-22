@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wangdazhuo/media-backup/internal/config"
+	"github.com/guowanghushifu/media-backup/internal/config"
 )
 
 func TestProxyEnvBuildsURLWithEscapedCredentials(t *testing.T) {

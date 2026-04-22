@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/wangdazhuo/media-backup/internal/app"
-	"github.com/wangdazhuo/media-backup/internal/config"
+	"github.com/guowanghushifu/media-backup/internal/app"
+	"github.com/guowanghushifu/media-backup/internal/config"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wangdazhuo/media-backup/internal/app"
+	"github.com/guowanghushifu/media-backup/internal/app"
 )
 
 func TestRunCancelsUploaderOnShutdown(t *testing.T) {

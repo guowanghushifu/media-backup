@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wangdazhuo/media-backup/internal/queue"
+	"github.com/guowanghushifu/media-backup/internal/queue"
 )
 
 func TestSchedulerDeduplicatesQueuedJob(t *testing.T) {

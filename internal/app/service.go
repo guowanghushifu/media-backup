@@ -13,21 +13,25 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/wangdazhuo/media-backup/internal/config"
-	"github.com/wangdazhuo/media-backup/internal/queue"
-	"github.com/wangdazhuo/media-backup/internal/rclone"
-	"github.com/wangdazhuo/media-backup/internal/ui"
-	"github.com/wangdazhuo/media-backup/internal/watcher"
+	"github.com/guowanghushifu/media-backup/internal/config"
+	"github.com/guowanghushifu/media-backup/internal/queue"
+	"github.com/guowanghushifu/media-backup/internal/rclone"
+	"github.com/guowanghushifu/media-backup/internal/ui"
+	"github.com/guowanghushifu/media-backup/internal/watcher"
 )
 
 const maxRecentEvents = 10
 
 type Service struct {
-	cfg       *config.Config
-	logger    *log.Logger
-	scheduler *queue.Scheduler
-	watcher   *fsnotify.Watcher
-	uiWriter  io.Writer
+	cfg          *config.Config
+	logger       *log.Logger
+	scheduler    *queue.Scheduler
+	watcher      *fsnotify.Watcher
+	uiWriter     io.Writer
+	mkdirAll     func(string, os.FileMode) error
+	addWatches   func(string) error
+	scanExisting func(string, string, []string, time.Duration) (int, error)
+	now          func() time.Time
 
 	mu           sync.Mutex
 	jobs         map[string]*jobRuntime
@@ -57,16 +61,20 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	}
 
 	s := &Service{
-		cfg:        cfg,
-		logger:     logger,
-		scheduler:  queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
-		watcher:    fsWatcher,
-		uiWriter:   os.Stdout,
-		jobs:       make(map[string]*jobRuntime, len(cfg.Jobs)),
-		processing: map[string]struct{}{},
-		retryDue:   map[string]time.Time{},
-		wakeCh:     make(chan struct{}, 1),
+		cfg:          cfg,
+		logger:       logger,
+		scheduler:    queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
+		watcher:      fsWatcher,
+		uiWriter:     os.Stdout,
+		mkdirAll:     os.MkdirAll,
+		scanExisting: watcher.ScanExistingAndLink,
+		now:          time.Now,
+		jobs:         make(map[string]*jobRuntime, len(cfg.Jobs)),
+		processing:   map[string]struct{}{},
+		retryDue:     map[string]time.Time{},
+		wakeCh:       make(chan struct{}, 1),
 	}
+	s.addWatches = s.addRecursiveWatches
 
 	for _, job := range cfg.Jobs {
 		s.jobs[job.SourceDir] = &jobRuntime{cfg: job, key: job.SourceDir}
@@ -81,14 +89,47 @@ func (s *Service) Close() error {
 func (s *Service) Run(ctx context.Context) error {
 	defer s.Close()
 
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.uiLoop(runCtx)
+	}()
+
+	if err := s.startupCatchUp(); err != nil {
+		cancel()
+		wg.Wait()
+		return err
+	}
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s.eventLoop(runCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		s.dispatchLoop(runCtx)
+	}()
+
+	<-ctx.Done()
+	cancel()
+	wg.Wait()
+	return ctx.Err()
+}
+
+func (s *Service) startupCatchUp() error {
 	for _, job := range s.jobs {
-		if err := os.MkdirAll(job.cfg.LinkDir, 0o755); err != nil {
+		if err := s.mkdirAll(job.cfg.LinkDir, 0o755); err != nil {
 			return err
 		}
-		if err := s.addRecursiveWatches(job.cfg.SourceDir); err != nil {
+		if err := s.addWatches(job.cfg.SourceDir); err != nil {
 			return err
 		}
-		count, err := watcher.ScanAndLink(job.cfg.SourceDir, job.cfg.LinkDir, s.cfg.Extensions, s.cfg.StableDuration)
+		count, err := s.scanExisting(job.cfg.SourceDir, job.cfg.LinkDir, s.cfg.Extensions, s.cfg.StableDuration)
 		if err != nil {
 			return err
 		}
@@ -96,25 +137,7 @@ func (s *Service) Run(ctx context.Context) error {
 			s.scheduler.MarkDirty(job.key)
 		}
 	}
-
-	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		s.eventLoop(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		s.dispatchLoop(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		s.uiLoop(ctx)
-	}()
-
-	<-ctx.Done()
-	wg.Wait()
-	return ctx.Err()
+	return nil
 }
 
 func (s *Service) eventLoop(ctx context.Context) {
@@ -322,17 +345,29 @@ func (s *Service) runUILoop(ctx context.Context, ticks <-chan time.Time) {
 	s.writeUI(ui.EnterAlternateScreen())
 	defer s.writeUI("\n")
 	defer s.writeUI(ui.LeaveAlternateScreen())
+	s.renderDashboard(s.currentTime())
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-ticks:
-			active, events, waiting := s.snapshotUI()
-			content := ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)
-			s.writeUI(ui.RewriteFrame(content))
+			s.renderDashboard(now)
 		}
 	}
+}
+
+func (s *Service) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func (s *Service) renderDashboard(now time.Time) {
+	active, events, waiting := s.snapshotUI()
+	content := ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)
+	s.writeUI(ui.RewriteFrame(content))
 }
 
 func (s *Service) writeUI(content string) {

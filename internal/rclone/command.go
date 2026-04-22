@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/wangdazhuo/media-backup/internal/config"
+	"github.com/guowanghushifu/media-backup/internal/config"
 )
 
 type CommandExecutor struct {

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wangdazhuo/media-backup/internal/watcher"
+	"github.com/guowanghushifu/media-backup/internal/watcher"
 )
 
 func TestWatchServiceRegistersNewDirectories(t *testing.T) {

@@ -4,15 +4,17 @@ import (
 	"context"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/wangdazhuo/media-backup/internal/config"
-	"github.com/wangdazhuo/media-backup/internal/queue"
-	"github.com/wangdazhuo/media-backup/internal/ui"
+	"github.com/guowanghushifu/media-backup/internal/config"
+	"github.com/guowanghushifu/media-backup/internal/queue"
+	"github.com/guowanghushifu/media-backup/internal/ui"
 )
 
 func TestSnapshotUIIncludesRecentEventsWhileIdle(t *testing.T) {
@@ -140,10 +142,12 @@ func TestHandleRcloneOutputLineUpdatesSummaryForStatsWithoutRecentEvent(t *testi
 func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
 	t.Parallel()
 
+	start := time.Date(2026, 4, 22, 17, 4, 9, 0, time.UTC)
 	now := time.Date(2026, 4, 22, 17, 4, 10, 0, time.UTC)
 	s := newTestService()
 	writer := newRecordingWriter()
 	s.uiWriter = writer
+	s.now = func() time.Time { return start }
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -153,7 +157,7 @@ func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
 		close(done)
 	}()
 
-	writer.waitForWrites(t, 1)
+	writer.waitForWrites(t, 2)
 
 	ticks <- now
 	writer.waitForWrites(t, 1)
@@ -163,11 +167,152 @@ func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
 
 	active, events, waiting := s.snapshotUI()
 	want := ui.EnterAlternateScreen() +
+		ui.RewriteFrame(ui.RenderDashboard(start, active, events, waiting, s.cfg.MaxParallelUploads)) +
 		ui.RewriteFrame(ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)) +
 		ui.LeaveAlternateScreen() +
 		"\n"
 	if got := writer.String(); got != want {
 		t.Fatalf("runUILoop() output = %q, want %q", got, want)
+	}
+}
+
+func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := t.TempDir()
+	linkDir := filepath.Join(t.TempDir(), "links")
+	cfg := &config.Config{
+		MaxParallelUploads: 1,
+		StableDuration:     45 * time.Second,
+		Jobs: []config.JobConfig{
+			{
+				Name:      "movie",
+				SourceDir: sourceDir,
+				LinkDir:   linkDir,
+			},
+		},
+		Extensions: []string{".mkv"},
+	}
+
+	s, err := NewService(cfg, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	writer := newRecordingWriter()
+	s.uiWriter = writer
+	start := time.Date(2026, 4, 22, 17, 4, 10, 0, time.UTC)
+	s.now = func() time.Time { return start }
+
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	scanReturned := make(chan struct{})
+	s.mkdirAll = func(string, os.FileMode) error {
+		return nil
+	}
+	s.addWatches = func(string) error {
+		return nil
+	}
+	s.scanExisting = func(string, string, []string, time.Duration) (int, error) {
+		close(scanStarted)
+		<-releaseScan
+		close(scanReturned)
+		return 0, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx)
+	}()
+
+	select {
+	case <-scanStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for startup scan to begin")
+	}
+
+	writer.waitForWrites(t, 2)
+
+	select {
+	case <-scanReturned:
+		t.Fatal("startup scan returned before test released it")
+	default:
+	}
+
+	want := ui.EnterAlternateScreen() +
+		ui.RewriteFrame(ui.RenderDashboard(start, nil, nil, 0, s.cfg.MaxParallelUploads))
+	if got := writer.String(); got != want {
+		t.Fatalf("startup UI output before scan completes = %q, want %q", got, want)
+	}
+
+	close(releaseScan)
+	cancel()
+
+	if err := <-errCh; err != context.Canceled {
+		t.Fatalf("Run() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := t.TempDir()
+	linkDir := filepath.Join(t.TempDir(), "links")
+	cfg := &config.Config{
+		MaxParallelUploads: 1,
+		StableDuration:     90 * time.Second,
+		Jobs: []config.JobConfig{
+			{
+				Name:      "movie",
+				SourceDir: sourceDir,
+				LinkDir:   linkDir,
+			},
+		},
+		Extensions: []string{".mkv"},
+	}
+
+	s, err := NewService(cfg, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	s.uiWriter = io.Discard
+	s.mkdirAll = func(string, os.FileMode) error {
+		return nil
+	}
+	s.addWatches = func(string) error {
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.scanExisting = func(gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration) (int, error) {
+		if gotSourceDir != sourceDir {
+			t.Fatalf("scanExisting sourceDir = %q, want %q", gotSourceDir, sourceDir)
+		}
+		if gotLinkDir != linkDir {
+			t.Fatalf("scanExisting linkDir = %q, want %q", gotLinkDir, linkDir)
+		}
+		if len(gotExtensions) != 1 || gotExtensions[0] != ".mkv" {
+			t.Fatalf("scanExisting extensions = %v, want [.mkv]", gotExtensions)
+		}
+		if gotStableDuration != cfg.StableDuration {
+			t.Fatalf("scanExisting stableDuration = %v, want %v", gotStableDuration, cfg.StableDuration)
+		}
+		cancel()
+		return 2, nil
+	}
+
+	err = s.Run(ctx)
+	if err != context.Canceled {
+		t.Fatalf("Run() error = %v, want %v", err, context.Canceled)
+	}
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 1 || ready[0] != sourceDir {
+		t.Fatalf("Ready() = %v, want [%s]", ready, sourceDir)
 	}
 }
 
