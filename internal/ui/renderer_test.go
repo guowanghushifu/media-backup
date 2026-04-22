@@ -1,7 +1,6 @@
 package ui_test
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,8 +24,8 @@ func TestRenderActiveDashboard(t *testing.T) {
 
 	now := time.Date(2026, 4, 22, 15, 4, 5, 0, time.UTC)
 	active := []ui.JobStatus{
-		{Name: "job-a", Summary: "Transferred: 35%"},
-		{Name: "job-b", Summary: "Transferred: 74%"},
+		{Name: "job-a", Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+		{Name: "job-b", Summary: "12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s", Event: "THIS_IS_TEST/uploadtest.bin: Copied (new)"},
 	}
 	out := ui.RenderDashboard(
 		now,
@@ -36,19 +35,24 @@ func TestRenderActiveDashboard(t *testing.T) {
 	)
 	want := strings.Join([]string{
 		"[2026-04-22 15:04:05] 当前状态：正在传输 | 活跃任务: 2/5 | 等待中: 1",
-		"[job-a] Transferred: 35%",
-		"[job-b] Transferred: 74%",
+		"[job-a] 832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s",
+		"[job-b] 12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s",
+		"[job-b] 最近事件: THIS_IS_TEST/uploadtest.bin: Copied (new)",
 	}, "\n")
 	if out != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
 	}
 
 	lines := strings.Split(out, "\n")
-	if len(lines) != 1+len(active) {
-		t.Fatalf("RenderDashboard() line count = %d, want %d", len(lines), 1+len(active))
+	if len(lines) != 4 {
+		t.Fatalf("RenderDashboard() line count = %d, want 4", len(lines))
 	}
-	for i, job := range active {
-		wantLine := fmt.Sprintf("[%s] %s", job.Name, job.Summary)
+	wantLines := []string{
+		"[job-a] 832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s",
+		"[job-b] 12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s",
+		"[job-b] 最近事件: THIS_IS_TEST/uploadtest.bin: Copied (new)",
+	}
+	for i, wantLine := range wantLines {
 		if lines[i+1] != wantLine {
 			t.Fatalf("RenderDashboard() line %d = %q, want %q", i+2, lines[i+1], wantLine)
 		}

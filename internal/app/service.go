@@ -18,6 +18,8 @@ import (
 	"github.com/wangdazhuo/media-backup/internal/watcher"
 )
 
+const recentEventTTL = 5 * time.Second
+
 type Service struct {
 	cfg       *config.Config
 	logger    *log.Logger
@@ -35,6 +37,8 @@ type jobRuntime struct {
 	cfg            config.JobConfig
 	key            string
 	summary        string
+	event          string
+	eventAt        time.Time
 	active         bool
 	dirtyDuringRun bool
 }
@@ -260,6 +264,13 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 				s.mu.Lock()
 				job.summary = stats
 				s.mu.Unlock()
+				return
+			}
+			if payload, ok := rclone.ParseEvent(line); ok {
+				s.mu.Lock()
+				job.event = payload
+				job.eventAt = time.Now()
+				s.mu.Unlock()
 			}
 		},
 	}
@@ -269,6 +280,8 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 		s.mu.Lock()
 		job.active = false
 		job.summary = fmt.Sprintf("上传失败: %v", err)
+		job.event = ""
+		job.eventAt = time.Time{}
 		s.retryDue[job.key] = time.Now().Add(s.cfg.RetryInterval)
 		s.mu.Unlock()
 		s.scheduler.FinishFailed(job.key)
@@ -280,6 +293,8 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	dirtyDuringRun := job.dirtyDuringRun
 	job.active = false
 	job.summary = "上传完成"
+	job.event = ""
+	job.eventAt = time.Time{}
 	s.mu.Unlock()
 
 	if dirtyDuringRun {
@@ -292,6 +307,8 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 		s.logger.Printf("cleanup %s: %v", job.cfg.LinkDir, err)
 		s.mu.Lock()
 		job.summary = fmt.Sprintf("清理失败: %v", err)
+		job.event = ""
+		job.eventAt = time.Time{}
 		s.retryDue[job.key] = time.Now().Add(s.cfg.RetryInterval)
 		s.mu.Unlock()
 		s.scheduler.FinishFailed(job.key)
@@ -306,23 +323,30 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 func (s *Service) uiLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	defer fmt.Print("\n")
+
+	previousLines := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			active, waiting := s.snapshotUI()
+			active, waiting := s.snapshotUI(now)
+			var content string
 			if len(active) == 0 {
-				fmt.Println(ui.RenderIdle(now))
-				continue
+				content = ui.RenderIdle(now)
+			} else {
+				content = ui.RenderDashboard(now, active, waiting, s.cfg.MaxParallelUploads)
 			}
-			fmt.Println(ui.RenderDashboard(now, active, waiting, s.cfg.MaxParallelUploads))
+			frame, lines := ui.RewriteFrame(previousLines, content)
+			fmt.Print(frame)
+			previousLines = lines
 		}
 	}
 }
 
-func (s *Service) snapshotUI() ([]ui.JobStatus, int) {
+func (s *Service) snapshotUI(now time.Time) ([]ui.JobStatus, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -335,7 +359,11 @@ func (s *Service) snapshotUI() ([]ui.JobStatus, int) {
 		if summary == "" {
 			summary = "等待 rclone 输出"
 		}
-		active = append(active, ui.JobStatus{Name: job.cfg.Name, Summary: summary})
+		event := ""
+		if job.event != "" && !job.eventAt.IsZero() && now.Sub(job.eventAt) <= recentEventTTL {
+			event = job.event
+		}
+		active = append(active, ui.JobStatus{Name: job.cfg.Name, Summary: summary, Event: event})
 	}
 	return active, len(s.scheduler.Ready())
 }

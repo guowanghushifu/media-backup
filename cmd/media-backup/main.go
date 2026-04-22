@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/wangdazhuo/media-backup/internal/app"
@@ -13,10 +15,15 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "configs/config.example.yaml", "path to config file")
+	configPath := flag.String("config", "", "path to config file")
 	flag.Parse()
 
-	logFile, err := app.OpenLogFile("logs/media-backup.log")
+	logPath, err := resolveLogPath(os.Executable)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	logFile, err := app.OpenLogFile(logPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -24,7 +31,12 @@ func main() {
 
 	logger := log.New(logFile, "", log.LstdFlags)
 
-	cfg, err := config.LoadConfig(*configPath)
+	resolvedConfigPath, err := resolveConfigPath(*configPath, os.Executable, os.Stat)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(resolvedConfigPath)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -48,4 +60,32 @@ func main() {
 	if err := a.Run(context.Background(), stop); err != nil && err != context.Canceled {
 		logger.Fatal(err)
 	}
+}
+
+func resolveConfigPath(flagValue string, executable func() (string, error), stat func(string) (os.FileInfo, error)) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+
+	exePath, err := executable()
+	if err != nil {
+		return "", err
+	}
+
+	candidate := filepath.Join(filepath.Dir(exePath), "config.yaml")
+	if _, err := stat(candidate); err == nil {
+		return candidate, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	return "", errors.New("config file not found: specify -config or place config.yaml next to the executable")
+}
+
+func resolveLogPath(executable func() (string, error)) (string, error) {
+	exePath, err := executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exePath), "logs", "media-backup.log"), nil
 }

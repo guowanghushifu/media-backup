@@ -9,6 +9,7 @@ import (
 type JobStatus struct {
 	Name    string
 	Summary string
+	Event   string
 }
 
 func RenderIdle(now time.Time) string {
@@ -22,6 +23,9 @@ func RenderDashboard(now time.Time, active []JobStatus, waiting int, maxParallel
 	}
 	for _, job := range active {
 		lines = append(lines, fmt.Sprintf("[%s] %s", job.Name, job.Summary))
+		if job.Event != "" {
+			lines = append(lines, fmt.Sprintf("[%s] 最近事件: %s", job.Name, job.Event))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
