@@ -5,7 +5,7 @@
 Adjust the terminal UI so it is split into two persistent sections:
 
 - the upper section shows current runtime status
-- the lower section shows the most recent 10 transfer events
+- the lower section shows the most recent 10 transfer events with timestamps
 
 This change is intended to make recent file transfer history visible even after an upload finishes or the program returns to idle.
 
@@ -50,12 +50,13 @@ This block must contain only status information. Transfer event lines are no lon
 
 ### Recent Events Block
 
-The lower block shows the most recent 10 transfer events parsed from `rclone` output.
+The lower block shows the most recent 10 transfer events parsed from `rclone` output, with the local time when each event was recorded by the program.
 
 Behavior rules:
 
 - only parsed transfer events are recorded here
 - events are stored globally, not per active job
+- each event entry stores both timestamp and message
 - the list keeps at most 10 entries
 - when an 11th event arrives, drop the oldest event
 - events remain visible while uploads are active
@@ -85,6 +86,7 @@ It no longer needs fields dedicated to temporary event display.
 Requirements:
 
 - append a new entry whenever `rclone.ParseEvent` returns a payload
+- record `time.Now()` together with the parsed payload at append time
 - preserve insertion order
 - trim the slice to the most recent 10 entries
 - protect access with the existing service mutex
@@ -103,8 +105,8 @@ Suggested layout:
 [job-b] 12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s
 
 最近事件:
-1. THIS_IS_TEST/file-01.mkv: Copied (new)
-2. THIS_IS_TEST/file-02.mkv: Copied (new)
+1. [15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)
+2. [15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)
 ```
 
 Idle layout should keep the same lower block:
@@ -113,8 +115,8 @@ Idle layout should keep the same lower block:
 [2026-04-22 15:04:05] 当前状态：空闲
 
 最近事件:
-1. THIS_IS_TEST/file-01.mkv: Copied (new)
-2. THIS_IS_TEST/file-02.mkv: Copied (new)
+1. [15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)
+2. [15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)
 ```
 
 Formatting requirements:
@@ -122,6 +124,7 @@ Formatting requirements:
 - keep the status block first
 - insert a blank line between the two blocks for readability
 - always render the `最近事件:` header
+- render each event line with a time prefix so users can tell when it happened
 - render at most 10 event lines under that header
 - render a placeholder line when the event list is empty
 
@@ -152,8 +155,10 @@ Required tests:
 
 - service snapshot keeps recent events even when no job is active
 - service snapshot keeps only the most recent 10 events
+- service snapshot preserves event timestamps alongside event messages
 - service snapshot no longer depends on event TTL behavior
 - renderer output shows separate status and event blocks
+- renderer output shows timestamps on recent event lines
 - renderer output for active jobs does not include inline event lines
 - renderer output for idle state still includes the recent events block
 
