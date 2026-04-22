@@ -6,7 +6,7 @@ Build a Go CLI program for Debian that watches one or more source directories, c
 
 ## Scope
 
-The program runs in the foreground as a single process. It reads configuration from a file, performs an initial catch-up scan, monitors source directories recursively, and processes upload jobs through one serial queue.
+The program runs in the foreground as a single process. It reads configuration from a file, performs an initial catch-up scan, monitors source directories recursively, and processes upload jobs with per-job serialization plus bounded global concurrency.
 
 Supported media extensions by default:
 
@@ -25,6 +25,7 @@ Example:
 poll_interval: 1s
 stable_duration: 60s
 retry_interval: 10m
+max_parallel_uploads: 5
 extensions: [".mkv", ".mp4", ".m2ts", ".ts"]
 rclone_args:
   - --drive-chunk-size=256M
@@ -50,7 +51,11 @@ Configuration rules:
 - `extensions` is a global setting. If omitted, use the default extension list above.
 - `stable_duration` is a global setting. If omitted, default to `60s`.
 - `retry_interval` is a global setting. If omitted, default to `10m`.
+- `max_parallel_uploads` is a global setting. If omitted, default to `5`.
 - `rclone_args` is a global setting. If omitted, use a safe default matching the sample above.
+- `source_dir` values must be unique across jobs.
+- `link_dir` values must be unique across jobs.
+- `rclone_remote` values should also be unique for operational clarity.
 
 ## Runtime Model
 
@@ -58,7 +63,7 @@ The program has five logical components:
 
 1. `config`: parse and validate YAML configuration.
 2. `watcher`: recursive directory watch, initial scan, stable-file detection, hard-link creation.
-3. `queue`: deduplicated serial upload scheduling across all jobs.
+3. `queue`: deduplicated upload scheduling with per-job serialization and global concurrency control.
 4. `rclone`: invoke `rclone copy`, read progress output, return success or failure.
 5. `ui`: print idle state and transfer state to the terminal.
 
@@ -86,7 +91,7 @@ For each file:
 - Ensure the parent directory exists under `link_dir`.
 - Create a hard link in `link_dir` using the same relative path if the link target does not already exist.
 
-If at least one valid file is linked or already exists in `link_dir`, enqueue the corresponding job for upload.
+If at least one valid file is linked or already exists in `link_dir`, mark the corresponding job ready for upload.
 
 This startup scan is required so a restart does not miss media files that already exist on disk.
 
@@ -145,7 +150,12 @@ If the target file already exists, the program should treat it as already linked
 
 ## Queue and Scheduling
 
-Uploads are serialized globally. The queue item is a whole configured job, not an individual file.
+The queue item is a whole configured job, not an individual file.
+
+Uploads must obey two constraints at the same time:
+
+1. the same configured job must always run serially
+2. different jobs may run in parallel, up to `max_parallel_uploads`
 
 Each job maintains three scheduling flags:
 
@@ -166,7 +176,17 @@ Rules:
 5. After a failed upload round:
    keep all files in `link_dir`, clear `running`, and re-enqueue the job after `retry_interval`.
 
-This satisfies the requirement that a second file created during an active upload is not expected to be included in the first `rclone` run, but must be sent by a later run of the same job.
+Scheduler behavior:
+
+1. maintain a ready set of jobs eligible to run
+2. only dispatch a job if its `running=false`
+3. only dispatch a job if a global upload slot is available
+4. when dispatched, set `queued=false`, `running=true`
+5. when finished, release the global upload slot and evaluate `dirty`
+
+Global concurrency is enforced with a semaphore-sized pool of upload slots. The initial version uses `max_parallel_uploads=5`.
+
+This satisfies the requirement that a second file created during an active upload is not expected to be included in the first `rclone` run, but must be sent by a later run of the same job, while allowing unrelated source directories to upload concurrently.
 
 ## Rclone Execution
 
@@ -202,21 +222,26 @@ When no upload work is active, print once per second:
 [YYYY-MM-DD HH:MM:SS] 当前状态：空闲
 ```
 
-When `rclone` is active, print:
+When one or more `rclone` processes are active, render a compact multi-task status view once per second.
+
+Suggested first line:
 
 ```text
-[YYYY-MM-DD HH:MM:SS] 当前状态：正在传输
+[YYYY-MM-DD HH:MM:SS] 当前状态：正在传输 | 活跃任务: 3/5 | 等待中: 2
 ```
 
-Then print the most recent parsed `rclone` stats line, for example:
+Then print one line per active job, for example:
 
 ```text
-Transferred: 1.234 TiB / 3.560 TiB, 35%, 82.114 MiB/s, ETA 6h12m
+[4k-remux-sgnb] Transferred: 1.234 TiB / 3.560 TiB, 35%, 82.114 MiB/s, ETA 6h12m
+[another-job] Transferred: 820.000 GiB / 1.100 TiB, 74%, 95.200 MiB/s, ETA 52m
 ```
 
-If no newer stats line is available for the current second, repeat the latest known line.
+If no newer stats line is available for the current second, repeat the latest known line for that job.
 
-The terminal output is for current state visibility, not full audit logging.
+Waiting jobs may be shown as a compact summary count. The UI does not need to print one line for every idle job.
+
+The terminal output is for current state visibility, not full audit logging. Raw `rclone` output from concurrent jobs must not be written directly to the terminal. Each child process is parsed independently and then rendered by the UI layer.
 
 ## Logging
 
@@ -233,6 +258,7 @@ Log items include:
 - link creation
 - queue transitions
 - `rclone` command start and exit code
+- per-job active slot acquisition and release
 - `rclone` raw output
 - retry scheduling
 - cleanup actions
