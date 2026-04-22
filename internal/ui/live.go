@@ -1,29 +1,19 @@
 package ui
 
-import (
-	"fmt"
-	"strings"
+const (
+	enterAlternateScreen = "\x1b[?1049h"
+	leaveAlternateScreen = "\x1b[?1049l"
+	repaintFromHome      = "\x1b[H\x1b[J"
 )
 
-func RewriteFrame(previousLines int, content string) (string, int) {
-	lines := frameLineCount(content)
-	if previousLines <= 0 {
-		return content, lines
-	}
-
-	var b strings.Builder
-	b.WriteString("\r")
-	if previousLines > 1 {
-		fmt.Fprintf(&b, "\x1b[%dA", previousLines-1)
-	}
-	b.WriteString("\x1b[J")
-	b.WriteString(content)
-	return b.String(), lines
+func EnterAlternateScreen() string {
+	return enterAlternateScreen
 }
 
-func frameLineCount(content string) int {
-	if content == "" {
-		return 1
-	}
-	return 1 + strings.Count(content, "\n")
+func LeaveAlternateScreen() string {
+	return leaveAlternateScreen
+}
+
+func RewriteFrame(content string) string {
+	return repaintFromHome + content
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ type Service struct {
 	logger    *log.Logger
 	scheduler *queue.Scheduler
 	watcher   *fsnotify.Watcher
+	uiWriter  io.Writer
 
 	mu           sync.Mutex
 	jobs         map[string]*jobRuntime
@@ -59,6 +61,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		logger:     logger,
 		scheduler:  queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
 		watcher:    fsWatcher,
+		uiWriter:   os.Stdout,
 		jobs:       make(map[string]*jobRuntime, len(cfg.Jobs)),
 		processing: map[string]struct{}{},
 		retryDue:   map[string]time.Time{},
@@ -311,22 +314,33 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 func (s *Service) uiLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	defer fmt.Print("\n")
 
-	previousLines := 0
+	s.runUILoop(ctx, ticker.C)
+}
+
+func (s *Service) runUILoop(ctx context.Context, ticks <-chan time.Time) {
+	s.writeUI(ui.EnterAlternateScreen())
+	defer s.writeUI("\n")
+	defer s.writeUI(ui.LeaveAlternateScreen())
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticker.C:
+		case now := <-ticks:
 			active, events, waiting := s.snapshotUI()
 			content := ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)
-			frame, lines := ui.RewriteFrame(previousLines, content)
-			fmt.Print(frame)
-			previousLines = lines
+			s.writeUI(ui.RewriteFrame(content))
 		}
 	}
+}
+
+func (s *Service) writeUI(content string) {
+	writer := s.uiWriter
+	if writer == nil {
+		writer = os.Stdout
+	}
+	_, _ = io.WriteString(writer, content)
 }
 
 func (s *Service) snapshotUI() ([]ui.JobStatus, []ui.EventRecord, int) {

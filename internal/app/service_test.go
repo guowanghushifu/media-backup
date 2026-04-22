@@ -1,14 +1,18 @@
 package app
 
 import (
+	"context"
 	"io"
 	"log"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/wangdazhuo/media-backup/internal/config"
 	"github.com/wangdazhuo/media-backup/internal/queue"
+	"github.com/wangdazhuo/media-backup/internal/ui"
 )
 
 func TestSnapshotUIIncludesRecentEventsWhileIdle(t *testing.T) {
@@ -133,11 +137,88 @@ func TestHandleRcloneOutputLineUpdatesSummaryForStatsWithoutRecentEvent(t *testi
 	}
 }
 
+func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 22, 17, 4, 10, 0, time.UTC)
+	s := newTestService()
+	writer := newRecordingWriter()
+	s.uiWriter = writer
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		s.runUILoop(ctx, ticks)
+		close(done)
+	}()
+
+	writer.waitForWrites(t, 1)
+
+	ticks <- now
+	writer.waitForWrites(t, 1)
+
+	cancel()
+	<-done
+
+	active, events, waiting := s.snapshotUI()
+	want := ui.EnterAlternateScreen() +
+		ui.RewriteFrame(ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)) +
+		ui.LeaveAlternateScreen() +
+		"\n"
+	if got := writer.String(); got != want {
+		t.Fatalf("runUILoop() output = %q, want %q", got, want)
+	}
+}
+
 func newTestService() *Service {
 	return &Service{
 		cfg:       &config.Config{MaxParallelUploads: 5},
 		logger:    log.New(io.Discard, "", 0),
 		scheduler: queue.New(queue.Options{MaxParallel: 5}),
 		jobs:      map[string]*jobRuntime{},
+	}
+}
+
+type recordingWriter struct {
+	mu     sync.Mutex
+	buf    strings.Builder
+	writes chan struct{}
+}
+
+func newRecordingWriter() *recordingWriter {
+	return &recordingWriter{
+		writes: make(chan struct{}, 8),
+	}
+}
+
+func (w *recordingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	_, _ = w.buf.Write(p)
+	select {
+	case w.writes <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+func (w *recordingWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func (w *recordingWriter) waitForWrites(t *testing.T, n int) {
+	t.Helper()
+
+	timeout := time.After(time.Second)
+	for i := 0; i < n; i++ {
+		select {
+		case <-w.writes:
+		case <-timeout:
+			t.Fatalf("timed out waiting for write %d; current output = %q", i+1, w.String())
+		}
 	}
 }

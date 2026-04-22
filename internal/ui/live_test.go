@@ -2,27 +2,28 @@ package ui
 
 import "testing"
 
-func TestRewriteFrameFirstRender(t *testing.T) {
+func TestEnterAlternateScreen(t *testing.T) {
 	t.Parallel()
 
-	got, lines := RewriteFrame(0, "line1\nline2")
-	if got != "line1\nline2" {
-		t.Fatalf("RewriteFrame() output = %q", got)
-	}
-	if lines != 2 {
-		t.Fatalf("RewriteFrame() lines = %d, want 2", lines)
+	if got := EnterAlternateScreen(); got != "\x1b[?1049h" {
+		t.Fatalf("EnterAlternateScreen() = %q, want %q", got, "\x1b[?1049h")
 	}
 }
 
-func TestRewriteFrameRefreshesExistingRegion(t *testing.T) {
+func TestLeaveAlternateScreen(t *testing.T) {
 	t.Parallel()
 
-	got, lines := RewriteFrame(3, "line1\nline2")
-	want := "\r\x1b[2A\x1b[Jline1\nline2"
-	if got != want {
-		t.Fatalf("RewriteFrame() output = %q, want %q", got, want)
+	if got := LeaveAlternateScreen(); got != "\x1b[?1049l" {
+		t.Fatalf("LeaveAlternateScreen() = %q, want %q", got, "\x1b[?1049l")
 	}
-	if lines != 2 {
-		t.Fatalf("RewriteFrame() lines = %d, want 2", lines)
+}
+
+func TestRewriteFrameRepaintsFromHome(t *testing.T) {
+	t.Parallel()
+
+	content := "line1\nline2"
+	want := "\x1b[H\x1b[J" + content
+	if got := RewriteFrame(content); got != want {
+		t.Fatalf("RewriteFrame() = %q, want %q", got, want)
 	}
 }
