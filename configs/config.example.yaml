@@ -15,6 +15,13 @@ rclone_args:
   - --stats=1s
   - --stats-one-line
   - -v
+proxy:
+  enabled: false
+  scheme: http
+  host: 127.0.0.1
+  port: 7890
+  username: ""
+  password: ""
 jobs:
   - name: 4k-remux-sgnb
     source_dir: /dld/upload/4K.REMUX.SGNB

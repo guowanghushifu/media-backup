@@ -258,6 +258,7 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 
 func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	exec := &rclone.CommandExecutor{
+		Proxy: s.cfg.Proxy,
 		OnOutput: func(line string) {
 			s.logger.Println(line)
 			if stats, ok := rclone.ParseStats(line); ok {
