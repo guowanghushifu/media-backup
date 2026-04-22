@@ -59,19 +59,20 @@ Behavior rules:
 - startup catch-up work happens while the UI is already active
 - the user should no longer see a blank terminal while startup scanning is running
 
-### Startup Scan Without Stability Delay
+### Startup Scan Without Redundant Stability Delay
 
 Initial catch-up scanning should treat pre-existing files differently from newly observed runtime files.
 
 Behavior rules:
 
-- files found during startup scan do not wait `stable_duration`
+- files found during startup scan whose last modification time is already older than `stable_duration` do not wait again
+- files found during startup scan whose last modification time is still within `stable_duration` must still pass a stability wait before linking
 - startup scan still filters by allowed extension
 - startup scan still creates hard links into `link_dir`
 - if at least one file is linked or already exists, the job is marked dirty for upload
 - runtime file handling continues to use `WaitStable(...)`
 
-This keeps the safety check where it matters, for newly arriving files, while removing unnecessary waiting for pre-existing files.
+This keeps the safety check for files that may still be in progress at restart time, while removing unnecessary waiting for clearly old files that were already stable before startup.
 
 ## Runtime Model Changes
 
@@ -99,11 +100,12 @@ Initial scanning can remain serial across jobs. Parallel scanning is not require
 Recommended approach:
 
 - keep the existing runtime path unchanged
-- add a dedicated startup scan path, or add an explicit option that disables stability waiting during startup
+- add a dedicated startup scan path, or add an explicit option that applies a startup-specific stability rule
 
 The important rule is:
 
-- startup scan must not call `WaitStable(...)`
+- startup scan must skip `WaitStable(...)` only for files whose modification time is already older than `stable_duration`
+- startup scan must still call `WaitStable(...)` for recently modified files
 - runtime event-driven processing must still call `WaitStable(...)`
 
 ## UI Behavior During Startup
@@ -127,7 +129,8 @@ If startup scanning fails for a job, startup should still fail the same way it d
 
 Required tests:
 
-- startup scan links existing files without calling stability waiting
+- startup scan links sufficiently old existing files without calling stability waiting
+- startup scan still waits for recently modified existing files
 - runtime file handling still depends on `WaitStable(...)`
 - service startup enters UI lifecycle before the catch-up scan completes
 - startup scan marks jobs dirty when existing files are found
