@@ -18,7 +18,7 @@ import (
 	"github.com/wangdazhuo/media-backup/internal/watcher"
 )
 
-const recentEventTTL = 5 * time.Second
+const maxRecentEvents = 10
 
 type Service struct {
 	cfg       *config.Config
@@ -26,19 +26,23 @@ type Service struct {
 	scheduler *queue.Scheduler
 	watcher   *fsnotify.Watcher
 
-	mu         sync.Mutex
-	jobs       map[string]*jobRuntime
-	processing map[string]struct{}
-	retryDue   map[string]time.Time
-	wakeCh     chan struct{}
+	mu           sync.Mutex
+	jobs         map[string]*jobRuntime
+	processing   map[string]struct{}
+	recentEvents []recentEvent
+	retryDue     map[string]time.Time
+	wakeCh       chan struct{}
+}
+
+type recentEvent struct {
+	at      time.Time
+	message string
 }
 
 type jobRuntime struct {
 	cfg            config.JobConfig
 	key            string
 	summary        string
-	event          string
-	eventAt        time.Time
 	active         bool
 	dirtyDuringRun bool
 }
@@ -260,19 +264,7 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	exec := &rclone.CommandExecutor{
 		Proxy: s.cfg.Proxy,
 		OnOutput: func(line string) {
-			s.logger.Println(line)
-			if stats, ok := rclone.ParseStats(line); ok {
-				s.mu.Lock()
-				job.summary = stats
-				s.mu.Unlock()
-				return
-			}
-			if payload, ok := rclone.ParseEvent(line); ok {
-				s.mu.Lock()
-				job.event = payload
-				job.eventAt = time.Now()
-				s.mu.Unlock()
-			}
+			s.handleRcloneOutputLine(job, line, time.Now)
 		},
 	}
 	runner := rclone.NewRunner(exec)
@@ -281,8 +273,6 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 		s.mu.Lock()
 		job.active = false
 		job.summary = fmt.Sprintf("上传失败: %v", err)
-		job.event = ""
-		job.eventAt = time.Time{}
 		s.retryDue[job.key] = time.Now().Add(s.cfg.RetryInterval)
 		s.mu.Unlock()
 		s.scheduler.FinishFailed(job.key)
@@ -294,8 +284,6 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	dirtyDuringRun := job.dirtyDuringRun
 	job.active = false
 	job.summary = "上传完成"
-	job.event = ""
-	job.eventAt = time.Time{}
 	s.mu.Unlock()
 
 	if dirtyDuringRun {
@@ -308,8 +296,6 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 		s.logger.Printf("cleanup %s: %v", job.cfg.LinkDir, err)
 		s.mu.Lock()
 		job.summary = fmt.Sprintf("清理失败: %v", err)
-		job.event = ""
-		job.eventAt = time.Time{}
 		s.retryDue[job.key] = time.Now().Add(s.cfg.RetryInterval)
 		s.mu.Unlock()
 		s.scheduler.FinishFailed(job.key)
@@ -333,13 +319,8 @@ func (s *Service) uiLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			active, waiting := s.snapshotUI(now)
-			var content string
-			if len(active) == 0 {
-				content = ui.RenderIdle(now)
-			} else {
-				content = ui.RenderDashboard(now, active, waiting, s.cfg.MaxParallelUploads)
-			}
+			active, events, waiting := s.snapshotUI()
+			content := ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)
 			frame, lines := ui.RewriteFrame(previousLines, content)
 			fmt.Print(frame)
 			previousLines = lines
@@ -347,7 +328,7 @@ func (s *Service) uiLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) snapshotUI(now time.Time) ([]ui.JobStatus, int) {
+func (s *Service) snapshotUI() ([]ui.JobStatus, []ui.EventRecord, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -360,13 +341,47 @@ func (s *Service) snapshotUI(now time.Time) ([]ui.JobStatus, int) {
 		if summary == "" {
 			summary = "等待 rclone 输出"
 		}
-		event := ""
-		if job.event != "" && !job.eventAt.IsZero() && now.Sub(job.eventAt) <= recentEventTTL {
-			event = job.event
-		}
-		active = append(active, ui.JobStatus{Name: job.cfg.Name, Summary: summary, Event: event})
+		active = append(active, ui.JobStatus{Name: job.cfg.Name, Summary: summary})
 	}
-	return active, len(s.scheduler.Ready())
+	events := make([]ui.EventRecord, 0, len(s.recentEvents))
+	for _, event := range s.recentEvents {
+		events = append(events, ui.EventRecord{At: event.at, Message: event.message})
+	}
+	return active, events, len(s.scheduler.Ready())
+}
+
+func (s *Service) appendRecentEvent(at time.Time, message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.appendRecentEventLocked(at, message)
+}
+
+func (s *Service) appendRecentEventNow(message string, now func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.appendRecentEventLocked(now(), message)
+}
+
+func (s *Service) appendRecentEventLocked(at time.Time, message string) {
+	s.recentEvents = append(s.recentEvents, recentEvent{at: at, message: message})
+	if len(s.recentEvents) > maxRecentEvents {
+		s.recentEvents = append([]recentEvent(nil), s.recentEvents[len(s.recentEvents)-maxRecentEvents:]...)
+	}
+}
+
+func (s *Service) handleRcloneOutputLine(job *jobRuntime, line string, now func() time.Time) {
+	s.logger.Println(line)
+	if stats, ok := rclone.ParseStats(line); ok {
+		s.mu.Lock()
+		job.summary = stats
+		s.mu.Unlock()
+		return
+	}
+	if payload, ok := rclone.ParseEvent(line); ok {
+		s.appendRecentEventNow(payload, now)
+	}
 }
 
 func (s *Service) findJob(path string) *jobRuntime {
