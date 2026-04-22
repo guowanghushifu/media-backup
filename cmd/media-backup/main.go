@@ -29,7 +29,10 @@ func main() {
 	}()
 
 	a := app.New(app.Dependencies{
-		RunUploads: func(context.Context) error { return nil },
+		RunUploads: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
 	})
 	if err := a.Run(context.Background(), stop); err != nil && err != context.Canceled {
 		logger.Fatal(err)
