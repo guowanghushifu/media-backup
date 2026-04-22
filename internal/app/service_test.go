@@ -37,6 +37,34 @@ func TestSnapshotUIIncludesRecentEventsWhileIdle(t *testing.T) {
 	}
 }
 
+func TestSnapshotUISortsActiveJobsByName(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.jobs["/movie"] = &jobRuntime{
+		cfg:     config.JobConfig{Name: "MOVIE"},
+		key:     "/movie",
+		summary: "movie summary",
+		active:  true,
+	}
+	s.jobs["/remux"] = &jobRuntime{
+		cfg:     config.JobConfig{Name: "4K-REMUX"},
+		key:     "/remux",
+		summary: "remux summary",
+		active:  true,
+	}
+
+	for i := 0; i < 50; i++ {
+		active, _, _ := s.snapshotUI()
+		if len(active) != 2 {
+			t.Fatalf("len(active) = %d, want 2", len(active))
+		}
+		if active[0].Name != "4K-REMUX" || active[1].Name != "MOVIE" {
+			t.Fatalf("active order = [%s %s], want [4K-REMUX MOVIE]", active[0].Name, active[1].Name)
+		}
+	}
+}
+
 func TestAppendRecentEventKeepsOnlyLatestTen(t *testing.T) {
 	t.Parallel()
 

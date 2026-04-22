@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -343,6 +344,12 @@ func (s *Service) snapshotUI() ([]ui.JobStatus, []ui.EventRecord, int) {
 		}
 		active = append(active, ui.JobStatus{Name: job.cfg.Name, Summary: summary})
 	}
+	sort.Slice(active, func(i, j int) bool {
+		if active[i].Name == active[j].Name {
+			return active[i].Summary < active[j].Summary
+		}
+		return active[i].Name < active[j].Name
+	})
 	events := make([]ui.EventRecord, 0, len(s.recentEvents))
 	for _, event := range s.recentEvents {
 		events = append(events, ui.EventRecord{At: event.at, Message: event.message})
