@@ -1,6 +1,7 @@
 package watcher_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/wangdazhuo/media-backup/internal/watcher"
@@ -14,7 +15,7 @@ func TestWatchServiceRegistersNewDirectories(t *testing.T) {
 	if err := svc.AddRecursive("/source", []string{"/source", "/source/movie"}); err != nil {
 		t.Fatalf("AddRecursive() error = %v", err)
 	}
-	if got := reg.Paths(); len(got) != 2 {
-		t.Fatalf("registered paths = %v, want 2 entries", got)
+	if got, want := reg.Paths(), []string{"/source", "/source/movie"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("registered paths = %v, want %v", got, want)
 	}
 }

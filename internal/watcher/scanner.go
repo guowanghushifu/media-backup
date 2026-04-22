@@ -9,11 +9,15 @@ import (
 
 func ScanAndLink(sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
 	var count int
+	cleanLinkDir := filepath.Clean(linkDir)
 	err := filepath.WalkDir(sourceDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			if filepath.Clean(path) == cleanLinkDir {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !hasExtension(path, extensions) {
