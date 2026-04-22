@@ -31,6 +31,7 @@ type Service struct {
 	mkdirAll       func(string, os.FileMode) error
 	addWatches     func(string) error
 	scanExisting   func(string, string, []string, time.Duration) (int, error)
+	scanLinkDir    func(string, []string) (int, error)
 	copyJob        func(context.Context, *jobRuntime) error
 	cleanupLinkDir func(string) error
 	startUpload    func(context.Context, *jobRuntime)
@@ -72,6 +73,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		uiWriter:       os.Stdout,
 		mkdirAll:       os.MkdirAll,
 		scanExisting:   watcher.ScanExistingAndLink,
+		scanLinkDir:    countUploadableFiles,
 		cleanupLinkDir: watcher.CleanupLinkDir,
 		now:            time.Now,
 		jobs:           make(map[string]*jobRuntime, len(cfg.Jobs)),
@@ -148,6 +150,20 @@ func (s *Service) startupCatchUp() error {
 			s.runAfterMarkDirty(job.key)
 			if !wasQueued {
 				s.appendSchedulerEventNow(job, fmt.Sprintf("启动扫描发现 %d 个文件，任务标记为待上传", count))
+			}
+			continue
+		}
+
+		linkCount, err := s.scanLinkDir(job.cfg.LinkDir, s.cfg.Extensions)
+		if err != nil {
+			return err
+		}
+		if linkCount > 0 {
+			wasQueued := s.isJobReady(job.key)
+			s.scheduler.MarkDirty(job.key)
+			s.runAfterMarkDirty(job.key)
+			if !wasQueued {
+				s.appendSchedulerEventNow(job, fmt.Sprintf("链接目录发现 %d 个待上传文件，任务标记为待上传", linkCount))
 			}
 		}
 	}
@@ -320,6 +336,7 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 }
 
 func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
+	s.logRcloneCommand(job)
 	err := s.copyJob(ctx, job)
 	if err != nil {
 		s.mu.Lock()
@@ -372,6 +389,14 @@ func (s *Service) copyWithRclone(ctx context.Context, job *jobRuntime) error {
 	}
 	runner := rclone.NewRunner(exec)
 	return runner.Copy(ctx, job.cfg.LinkDir, job.cfg.RcloneRemote, s.cfg.RcloneArgs)
+}
+
+func (s *Service) logRcloneCommand(job *jobRuntime) {
+	if s.logger == nil || job == nil {
+		return
+	}
+	args := append([]string{"rclone", "copy", job.cfg.LinkDir, job.cfg.RcloneRemote}, s.cfg.RcloneArgs...)
+	s.logger.Printf("run rclone command for %s: %s", job.cfg.Name, strings.Join(args, " "))
 }
 
 func (s *Service) uiLoop(ctx context.Context) {
@@ -551,4 +576,21 @@ func hasAllowedExtension(path string, extensions []string) bool {
 		}
 	}
 	return false
+}
+
+func countUploadableFiles(root string, extensions []string) (int, error) {
+	var count int
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if hasAllowedExtension(path, extensions) {
+			count++
+		}
+		return nil
+	})
+	return count, err
 }

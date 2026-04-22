@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"os"
 	"testing"
 	"time"
@@ -111,6 +113,21 @@ func TestResolveLogPathReturnsExecutableError(t *testing.T) {
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("resolveLogPath() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestLogConfigPathWritesResolvedPath(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := log.New(&buf, "", 0)
+
+	logConfigPath(logger, "/opt/media-backup/config.yaml")
+
+	got := buf.String()
+	want := "using config file: /opt/media-backup/config.yaml\n"
+	if got != want {
+		t.Fatalf("log output = %q, want %q", got, want)
 	}
 }
 

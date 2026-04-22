@@ -220,6 +220,7 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 		close(scanReturned)
 		return 0, nil
 	}
+	s.scanLinkDir = func(string, []string) (int, error) { return 0, nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -287,6 +288,7 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	s.addWatches = func(string) error {
 		return nil
 	}
+	s.scanLinkDir = func(string, []string) (int, error) { return 0, nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.scanExisting = func(gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration) (int, error) {
@@ -314,6 +316,42 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	ready := s.scheduler.Ready()
 	if len(ready) != 1 || ready[0] != sourceDir {
 		t.Fatalf("Ready() = %v, want [%s]", ready, sourceDir)
+	}
+}
+
+func TestStartupCatchUpMarksJobDirtyWhenLinkDirHasPendingFiles(t *testing.T) {
+	t.Parallel()
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link"}
+	s := &Service{
+		cfg:       &config.Config{StableDuration: time.Minute, Extensions: []string{".mkv"}},
+		logger:    log.New(io.Discard, "", 0),
+		scheduler: queue.New(queue.Options{MaxParallel: 1}),
+		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
+		retryDue:  map[string]time.Time{},
+		wakeCh:    make(chan struct{}, 1),
+		now: func() time.Time {
+			return time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC)
+		},
+	}
+	s.mkdirAll = func(string, os.FileMode) error { return nil }
+	s.addWatches = func(string) error { return nil }
+	s.scanExisting = func(string, string, []string, time.Duration) (int, error) { return 0, nil }
+	s.scanLinkDir = func(string, []string) (int, error) { return 1, nil }
+
+	if err := s.startupCatchUp(); err != nil {
+		t.Fatalf("startupCatchUp() error = %v", err)
+	}
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 1 || ready[0] != job.SourceDir {
+		t.Fatalf("Ready() = %v, want [%s]", ready, job.SourceDir)
+	}
+	if len(s.recentEvents) != 1 {
+		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
+	}
+	if got := s.recentEvents[0].message; got != "[MOVIE] 链接目录发现 1 个待上传文件，任务标记为待上传" {
+		t.Fatalf("recentEvents[0].message = %q, want link dir startup event", got)
 	}
 }
 
@@ -648,6 +686,39 @@ func TestRunUploadBindsRcloneOutputToJob(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("recentEvents = %#v, want bound rclone event on target job", s.recentEvents)
+	}
+}
+
+func TestRunUploadLogsRcloneCommand(t *testing.T) {
+	t.Parallel()
+
+	var buf strings.Builder
+	s := newTestService()
+	s.logger = log.New(&buf, "", 0)
+	s.cfg.RcloneArgs = []string{"--stats=1s", "--stats-one-line", "-v"}
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.cleanupLinkDir = func(string) error { return nil }
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			LinkDir:      "/dld/gd_upload/Movie-2025",
+			RcloneRemote: "gd1:/sync/Movie/Movie-2025",
+		},
+		key:    "/source",
+		active: true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	got := buf.String()
+	want := "run rclone command for MOVIE: rclone copy /dld/gd_upload/Movie-2025 gd1:/sync/Movie/Movie-2025 --stats=1s --stats-one-line -v\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("log output = %q, want substring %q", got, want)
 	}
 }
 

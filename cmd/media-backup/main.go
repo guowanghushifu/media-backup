@@ -40,6 +40,7 @@ func main() {
 	if err != nil {
 		logger.Fatal(err)
 	}
+	logConfigPath(logger, resolvedConfigPath)
 	service, err := app.NewService(cfg, logger)
 	if err != nil {
 		logger.Fatal(err)
@@ -88,4 +89,11 @@ func resolveLogPath(executable func() (string, error)) (string, error) {
 		return "", err
 	}
 	return filepath.Join(filepath.Dir(exePath), "logs", "media-backup.log"), nil
+}
+
+func logConfigPath(logger *log.Logger, path string) {
+	if logger == nil {
+		return
+	}
+	logger.Printf("using config file: %s", path)
 }
