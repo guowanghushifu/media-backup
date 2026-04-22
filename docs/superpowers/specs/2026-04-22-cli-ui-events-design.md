@@ -62,6 +62,7 @@ Behavior rules:
 - events remain visible while uploads are active
 - events remain visible when the program is idle
 - events are rendered in chronological order from oldest to newest so the newest item appears at the bottom
+- each rendered event line uses the timestamp format `[YYYY-MM-DD HH:MM:SS]`
 - if there are no events yet, render a placeholder such as `暂无事件`
 
 ## Data Model Changes
@@ -105,8 +106,8 @@ Suggested layout:
 [job-b] 12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s
 
 最近事件:
-1. [15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)
-2. [15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)
+1. [2026-04-22 15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)
+2. [2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)
 ```
 
 Idle layout should keep the same lower block:
@@ -115,8 +116,8 @@ Idle layout should keep the same lower block:
 [2026-04-22 15:04:05] 当前状态：空闲
 
 最近事件:
-1. [15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)
-2. [15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)
+1. [2026-04-22 15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)
+2. [2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)
 ```
 
 Formatting requirements:
@@ -124,7 +125,7 @@ Formatting requirements:
 - keep the status block first
 - insert a blank line between the two blocks for readability
 - always render the `最近事件:` header
-- render each event line with a time prefix so users can tell when it happened
+- render each event line with a full datetime prefix in `[YYYY-MM-DD HH:MM:SS]` format
 - render at most 10 event lines under that header
 - render a placeholder line when the event list is empty
 
@@ -158,7 +159,7 @@ Required tests:
 - service snapshot preserves event timestamps alongside event messages
 - service snapshot no longer depends on event TTL behavior
 - renderer output shows separate status and event blocks
-- renderer output shows timestamps on recent event lines
+- renderer output shows full datetime prefixes on recent event lines
 - renderer output for active jobs does not include inline event lines
 - renderer output for idle state still includes the recent events block
 
