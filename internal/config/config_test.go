@@ -80,6 +80,132 @@ jobs:
 	}
 }
 
+func TestLoadConfigNormalizesExtensionsToLowercase(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+extensions:
+  - .MKV
+  - .Mp4
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	want := []string{".mkv", ".mp4"}
+	assertEqualStringSlice(t, "Extensions", cfg.Extensions, want)
+}
+
+func TestLoadConfigRejectsDuplicateLinkDir(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: job-a
+    source_dir: /media/a
+    link_dir: /links/shared
+    rclone_remote: remote:a
+  - name: job-b
+    source_dir: /media/b
+    link_dir: /links/shared
+    rclone_remote: remote:b
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want duplicate link_dir error")
+	}
+	if !strings.Contains(err.Error(), "duplicate link_dir") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "duplicate link_dir")
+	}
+}
+
+func TestLoadConfigRejectsNoJobs(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+poll_interval: 1s
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want no jobs validation error")
+	}
+	if !strings.Contains(err.Error(), "at least one job") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "at least one job")
+	}
+}
+
+func TestLoadConfigRejectsJobMissingRequiredField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		jobYAML   string
+		wantError string
+	}{
+		{
+			name: "missing name",
+			jobYAML: `
+    source_dir: /media/a
+    link_dir: /links/a
+    rclone_remote: remote:a`,
+			wantError: "job name is required",
+		},
+		{
+			name: "missing source_dir",
+			jobYAML: `
+    name: job-a
+    link_dir: /links/a
+    rclone_remote: remote:a`,
+			wantError: "job source_dir is required",
+		},
+		{
+			name: "missing link_dir",
+			jobYAML: `
+    name: job-a
+    source_dir: /media/a
+    rclone_remote: remote:a`,
+			wantError: "job link_dir is required",
+		},
+		{
+			name: "missing rclone_remote",
+			jobYAML: `
+    name: job-a
+    source_dir: /media/a
+    link_dir: /links/a`,
+			wantError: "job rclone_remote is required",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeTempConfig(t, `
+jobs:
+  -`+tc.jobYAML+`
+`)
+
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatalf("LoadConfig error = nil, want %q", tc.wantError)
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tc.wantError)
+			}
+		})
+	}
+}
+
 func writeTempConfig(t *testing.T, body string) string {
 	t.Helper()
 
