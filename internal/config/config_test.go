@@ -80,6 +80,30 @@ jobs:
 	}
 }
 
+func TestLoadConfigRejectsDuplicateSourceDirWithSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: job-a
+    source_dir: /media/shared
+    link_dir: /links/a
+    rclone_remote: remote:a
+  - name: job-b
+    source_dir: "  /media/shared  "
+    link_dir: /links/b
+    rclone_remote: remote:b
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want duplicate source_dir error")
+	}
+	if !strings.Contains(err.Error(), "duplicate source_dir") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "duplicate source_dir")
+	}
+}
+
 func TestLoadConfigNormalizesExtensionsToLowercase(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +139,30 @@ jobs:
   - name: job-b
     source_dir: /media/b
     link_dir: /links/shared
+    rclone_remote: remote:b
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want duplicate link_dir error")
+	}
+	if !strings.Contains(err.Error(), "duplicate link_dir") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "duplicate link_dir")
+	}
+}
+
+func TestLoadConfigRejectsDuplicateLinkDirWithSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: job-a
+    source_dir: /media/a
+    link_dir: /links/shared
+    rclone_remote: remote:a
+  - name: job-b
+    source_dir: /media/b
+    link_dir: "  /links/shared  "
     rclone_remote: remote:b
 `)
 
