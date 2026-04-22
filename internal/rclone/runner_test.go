@@ -1,0 +1,38 @@
+package rclone
+
+import (
+	"context"
+	"testing"
+)
+
+func TestRunnerBuildsCommand(t *testing.T) {
+	t.Parallel()
+
+	exec := &RecordingExecutor{}
+	runner := NewRunner(exec)
+
+	extraArgs := []string{"--stats=1s", "--stats-one-line", "-v"}
+	if err := runner.Copy(context.Background(), "/links/movies", "remote:movies", extraArgs); err != nil {
+		t.Fatalf("Copy() error = %v", err)
+	}
+
+	want := []string{"copy", "/links/movies", "remote:movies", "--stats=1s", "--stats-one-line", "-v"}
+	if len(exec.Args) != len(want) {
+		t.Fatalf("command arg length = %d, want %d", len(exec.Args), len(want))
+	}
+	for i := range want {
+		if exec.Args[i] != want[i] {
+			t.Fatalf("command arg[%d] = %q, want %q", i, exec.Args[i], want[i])
+		}
+	}
+}
+
+type RecordingExecutor struct {
+	Args []string
+	Err  error
+}
+
+func (r *RecordingExecutor) Run(_ context.Context, args []string) error {
+	r.Args = append([]string(nil), args...)
+	return r.Err
+}
