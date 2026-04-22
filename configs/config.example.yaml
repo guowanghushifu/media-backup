@@ -1,0 +1,26 @@
+poll_interval: 1s
+stable_duration: 1m
+retry_interval: 10m
+max_parallel_uploads: 5
+extensions:
+  - .mkv
+  - .mp4
+  - .m2ts
+  - .ts
+rclone_args:
+  - --drive-chunk-size=256M
+  - --checkers=5
+  - --transfers=5
+  - --drive-stop-on-upload-limit
+  - --stats=1s
+  - --stats-one-line
+  - -v
+jobs:
+  - name: movies
+    source_dir: /srv/media/movies
+    link_dir: /srv/backup-links/movies
+    rclone_remote: media-backup:movies
+  - name: tv
+    source_dir: /srv/media/tv
+    link_dir: /srv/backup-links/tv
+    rclone_remote: media-backup:tv
