@@ -16,11 +16,7 @@ rclone_args:
   - --stats-one-line
   - -v
 jobs:
-  - name: movies
-    source_dir: /srv/media/movies
-    link_dir: /srv/backup-links/movies
-    rclone_remote: media-backup:movies
-  - name: tv
-    source_dir: /srv/media/tv
-    link_dir: /srv/backup-links/tv
-    rclone_remote: media-backup:tv
+  - name: 4k-remux-sgnb
+    source_dir: /dld/upload/4K.REMUX.SGNB
+    link_dir: /dld/gd_upload/4K.REMUX.SGNB
+    rclone_remote: gd1:/sync/Movie/4K.REMUX.SGNB
