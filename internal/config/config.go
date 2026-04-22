@@ -30,7 +30,17 @@ type Config struct {
 	MaxParallelUploads int           `yaml:"max_parallel_uploads"`
 	Extensions         []string      `yaml:"extensions"`
 	RcloneArgs         []string      `yaml:"rclone_args"`
+	Proxy              ProxyConfig   `yaml:"proxy"`
 	Jobs               []JobConfig   `yaml:"jobs"`
+}
+
+type ProxyConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Scheme   string `yaml:"scheme"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type JobConfig struct {
@@ -86,9 +96,25 @@ func normalizeConfig(cfg *Config) {
 	for i := range cfg.Extensions {
 		cfg.Extensions[i] = strings.ToLower(cfg.Extensions[i])
 	}
+	cfg.Proxy.Scheme = strings.ToLower(strings.TrimSpace(cfg.Proxy.Scheme))
+	cfg.Proxy.Host = strings.TrimSpace(cfg.Proxy.Host)
+	cfg.Proxy.Username = strings.TrimSpace(cfg.Proxy.Username)
+	cfg.Proxy.Password = strings.TrimSpace(cfg.Proxy.Password)
 }
 
 func validateConfig(cfg *Config) error {
+	if cfg.Proxy.Enabled {
+		if cfg.Proxy.Scheme != "http" && cfg.Proxy.Scheme != "https" {
+			return errors.New("proxy scheme must be http or https")
+		}
+		if cfg.Proxy.Host == "" {
+			return errors.New("proxy host is required")
+		}
+		if cfg.Proxy.Port <= 0 {
+			return errors.New("proxy port must be greater than 0")
+		}
+	}
+
 	if len(cfg.Jobs) == 0 {
 		return errors.New("config must include at least one job")
 	}

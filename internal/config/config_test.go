@@ -206,6 +206,133 @@ jobs:
 	}
 }
 
+func TestLoadConfigParsesProxyConfig(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+proxy:
+  enabled: true
+  scheme: http
+  host: 127.0.0.1
+  port: 7890
+  username: demo
+  password: s3cret
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if !cfg.Proxy.Enabled {
+		t.Fatal("Proxy.Enabled = false, want true")
+	}
+	if cfg.Proxy.Scheme != "http" {
+		t.Fatalf("Proxy.Scheme = %q, want %q", cfg.Proxy.Scheme, "http")
+	}
+	if cfg.Proxy.Host != "127.0.0.1" {
+		t.Fatalf("Proxy.Host = %q, want %q", cfg.Proxy.Host, "127.0.0.1")
+	}
+	if cfg.Proxy.Port != 7890 {
+		t.Fatalf("Proxy.Port = %d, want %d", cfg.Proxy.Port, 7890)
+	}
+	if cfg.Proxy.Username != "demo" {
+		t.Fatalf("Proxy.Username = %q, want %q", cfg.Proxy.Username, "demo")
+	}
+	if cfg.Proxy.Password != "s3cret" {
+		t.Fatalf("Proxy.Password = %q, want %q", cfg.Proxy.Password, "s3cret")
+	}
+}
+
+func TestLoadConfigAllowsDisabledProxy(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+proxy:
+  enabled: false
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.Proxy.Enabled {
+		t.Fatal("Proxy.Enabled = true, want false")
+	}
+}
+
+func TestLoadConfigRejectsInvalidProxyConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		proxyYAML string
+		wantError string
+	}{
+		{
+			name: "missing host",
+			proxyYAML: `
+proxy:
+  enabled: true
+  scheme: http
+  port: 7890`,
+			wantError: "proxy host is required",
+		},
+		{
+			name: "missing port",
+			proxyYAML: `
+proxy:
+  enabled: true
+  scheme: http
+  host: 127.0.0.1`,
+			wantError: "proxy port must be greater than 0",
+		},
+		{
+			name: "unsupported scheme",
+			proxyYAML: `
+proxy:
+  enabled: true
+  scheme: socks5
+  host: 127.0.0.1
+  port: 7890`,
+			wantError: "proxy scheme must be http or https",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeTempConfig(t, tc.proxyYAML+`
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatalf("LoadConfig error = nil, want %q", tc.wantError)
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tc.wantError)
+			}
+		})
+	}
+}
+
 func writeTempConfig(t *testing.T, body string) string {
 	t.Helper()
 
