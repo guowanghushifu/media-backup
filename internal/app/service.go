@@ -23,15 +23,18 @@ import (
 const maxRecentEvents = 10
 
 type Service struct {
-	cfg          *config.Config
-	logger       *log.Logger
-	scheduler    *queue.Scheduler
-	watcher      *fsnotify.Watcher
-	uiWriter     io.Writer
-	mkdirAll     func(string, os.FileMode) error
-	addWatches   func(string) error
-	scanExisting func(string, string, []string, time.Duration) (int, error)
-	now          func() time.Time
+	cfg            *config.Config
+	logger         *log.Logger
+	scheduler      *queue.Scheduler
+	watcher        *fsnotify.Watcher
+	uiWriter       io.Writer
+	mkdirAll       func(string, os.FileMode) error
+	addWatches     func(string) error
+	scanExisting   func(string, string, []string, time.Duration) (int, error)
+	copyJob        func(context.Context, string, string, []string) error
+	cleanupLinkDir func(string) error
+	startUpload    func(context.Context, *jobRuntime)
+	now            func() time.Time
 
 	mu           sync.Mutex
 	jobs         map[string]*jobRuntime
@@ -61,20 +64,25 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	}
 
 	s := &Service{
-		cfg:          cfg,
-		logger:       logger,
-		scheduler:    queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
-		watcher:      fsWatcher,
-		uiWriter:     os.Stdout,
-		mkdirAll:     os.MkdirAll,
-		scanExisting: watcher.ScanExistingAndLink,
-		now:          time.Now,
-		jobs:         make(map[string]*jobRuntime, len(cfg.Jobs)),
-		processing:   map[string]struct{}{},
-		retryDue:     map[string]time.Time{},
-		wakeCh:       make(chan struct{}, 1),
+		cfg:            cfg,
+		logger:         logger,
+		scheduler:      queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
+		watcher:        fsWatcher,
+		uiWriter:       os.Stdout,
+		mkdirAll:       os.MkdirAll,
+		scanExisting:   watcher.ScanExistingAndLink,
+		cleanupLinkDir: watcher.CleanupLinkDir,
+		now:            time.Now,
+		jobs:           make(map[string]*jobRuntime, len(cfg.Jobs)),
+		processing:     map[string]struct{}{},
+		retryDue:       map[string]time.Time{},
+		wakeCh:         make(chan struct{}, 1),
 	}
 	s.addWatches = s.addRecursiveWatches
+	s.copyJob = s.copyWithRclone
+	s.startUpload = func(ctx context.Context, job *jobRuntime) {
+		go s.runUpload(ctx, job)
+	}
 
 	for _, job := range cfg.Jobs {
 		s.jobs[job.SourceDir] = &jobRuntime{cfg: job, key: job.SourceDir}
@@ -134,7 +142,11 @@ func (s *Service) startupCatchUp() error {
 			return err
 		}
 		if count > 0 {
+			wasQueued := s.isJobReady(job.key)
 			s.scheduler.MarkDirty(job.key)
+			if !wasQueued {
+				s.appendSchedulerEventNow(job, fmt.Sprintf("启动扫描发现 %d 个文件，任务标记为待上传", count))
+			}
 		}
 	}
 	return nil
@@ -204,6 +216,9 @@ func (s *Service) processTree(ctx context.Context, job *jobRuntime, root string)
 
 func (s *Service) processFile(ctx context.Context, job *jobRuntime, path string) {
 	s.mu.Lock()
+	if s.processing == nil {
+		s.processing = map[string]struct{}{}
+	}
 	if _, ok := s.processing[path]; ok {
 		s.mu.Unlock()
 		return
@@ -226,12 +241,21 @@ func (s *Service) processFile(ctx context.Context, job *jobRuntime, path string)
 	}
 
 	s.mu.Lock()
+	wasActive := job.active
+	wasDirtyDuringRun := job.dirtyDuringRun
 	if job.active {
 		job.dirtyDuringRun = true
 	}
 	s.mu.Unlock()
 
+	wasQueued := s.isJobReady(job.key)
 	s.scheduler.MarkDirty(job.key)
+	if wasActive && !wasDirtyDuringRun {
+		s.appendSchedulerEventNow(job, "检测到新文件，任务保持运行中，完成后将重新排队")
+	}
+	if !wasActive && !wasQueued {
+		s.appendSchedulerEventNow(job, "检测到新文件，任务标记为待上传")
+	}
 	s.signalWake()
 }
 
@@ -255,7 +279,7 @@ func (s *Service) dispatchLoop(ctx context.Context) {
 
 func (s *Service) releaseRetries() {
 	s.mu.Lock()
-	now := time.Now()
+	now := s.currentTime()
 	var due []string
 	for key, at := range s.retryDue {
 		if !now.Before(at) {
@@ -267,6 +291,9 @@ func (s *Service) releaseRetries() {
 
 	for _, key := range due {
 		if s.scheduler.RetryJob(key) {
+			if job := s.jobs[key]; job != nil {
+				s.appendSchedulerEventNow(job, "到达重试时间，重新排队")
+			}
 			s.signalWake()
 		}
 	}
@@ -283,26 +310,21 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 		job.dirtyDuringRun = false
 		job.summary = "等待 rclone 输出"
 		s.mu.Unlock()
-		go s.runUpload(ctx, job)
+		s.appendSchedulerEventNow(job, "调度开始上传")
+		s.startUpload(ctx, job)
 	}
 }
 
 func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
-	exec := &rclone.CommandExecutor{
-		Proxy: s.cfg.Proxy,
-		OnOutput: func(line string) {
-			s.handleRcloneOutputLine(job, line, time.Now)
-		},
-	}
-	runner := rclone.NewRunner(exec)
-	err := runner.Copy(ctx, job.cfg.LinkDir, job.cfg.RcloneRemote, s.cfg.RcloneArgs)
+	err := s.copyJob(ctx, job.cfg.LinkDir, job.cfg.RcloneRemote, s.cfg.RcloneArgs)
 	if err != nil {
 		s.mu.Lock()
 		job.active = false
 		job.summary = fmt.Sprintf("上传失败: %v", err)
-		s.retryDue[job.key] = time.Now().Add(s.cfg.RetryInterval)
+		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
 		s.mu.Unlock()
 		s.scheduler.FinishFailed(job.key)
+		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
 		s.signalWake()
 		return
 	}
@@ -315,23 +337,40 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 
 	if dirtyDuringRun {
 		s.scheduler.Finish(job.key, false)
+		s.appendSchedulerEventNow(job, "上传完成，检测到新增文件，重新排队")
 		s.signalWake()
 		return
 	}
 
-	if err := watcher.CleanupLinkDir(job.cfg.LinkDir); err != nil {
+	if err := s.cleanupLinkDir(job.cfg.LinkDir); err != nil {
 		s.logger.Printf("cleanup %s: %v", job.cfg.LinkDir, err)
 		s.mu.Lock()
 		job.summary = fmt.Sprintf("清理失败: %v", err)
-		s.retryDue[job.key] = time.Now().Add(s.cfg.RetryInterval)
+		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
 		s.mu.Unlock()
 		s.scheduler.FinishFailed(job.key)
+		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
 		s.signalWake()
 		return
 	}
 
 	s.scheduler.Finish(job.key, false)
+	s.appendSchedulerEventNow(job, "上传完成，任务清空")
 	s.signalWake()
+}
+
+func (s *Service) copyWithRclone(ctx context.Context, linkDir, remote string, args []string) error {
+	exec := &rclone.CommandExecutor{
+		Proxy: s.cfg.Proxy,
+		OnOutput: func(line string) {
+			job := s.findJobByLinkDir(linkDir)
+			if job != nil {
+				s.handleRcloneOutputLine(job, line, time.Now)
+			}
+		},
+	}
+	runner := rclone.NewRunner(exec)
+	return runner.Copy(ctx, linkDir, remote, args)
 }
 
 func (s *Service) uiLoop(ctx context.Context) {
@@ -420,6 +459,17 @@ func (s *Service) appendRecentEventNow(message string, now func() time.Time) {
 	s.appendRecentEventLocked(now(), message)
 }
 
+func (s *Service) appendSchedulerEvent(at time.Time, job *jobRuntime, message string) {
+	if job == nil {
+		return
+	}
+	s.appendRecentEvent(at, fmt.Sprintf("[%s] %s", job.cfg.Name, message))
+}
+
+func (s *Service) appendSchedulerEventNow(job *jobRuntime, message string) {
+	s.appendSchedulerEvent(s.currentTime(), job, message)
+}
+
 func (s *Service) appendRecentEventLocked(at time.Time, message string) {
 	s.recentEvents = append(s.recentEvents, recentEvent{at: at, message: message})
 	if len(s.recentEvents) > maxRecentEvents {
@@ -451,6 +501,17 @@ func (s *Service) findJob(path string) *jobRuntime {
 	return nil
 }
 
+func (s *Service) findJobByLinkDir(path string) *jobRuntime {
+	cleanPath := filepath.Clean(path)
+	for _, job := range s.jobs {
+		linkDir := filepath.Clean(job.cfg.LinkDir)
+		if cleanPath == linkDir || strings.HasPrefix(cleanPath, linkDir+string(os.PathSeparator)) {
+			return job
+		}
+	}
+	return nil
+}
+
 func (s *Service) addRecursiveWatches(root string) error {
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -468,6 +529,15 @@ func (s *Service) signalWake() {
 	case s.wakeCh <- struct{}{}:
 	default:
 	}
+}
+
+func (s *Service) isJobReady(key string) bool {
+	for _, job := range s.scheduler.Ready() {
+		if job == key {
+			return true
+		}
+	}
+	return false
 }
 
 func hasAllowedExtension(path string, extensions []string) bool {
