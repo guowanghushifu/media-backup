@@ -381,6 +381,48 @@ func TestProcessFileRecordsQueueEventOnceForIdleJob(t *testing.T) {
 	}
 }
 
+func TestProcessFileRecordsQueueEventWhenDispatchStartsImmediately(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	path := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir}
+	s := &Service{
+		cfg:       &config.Config{StableDuration: time.Millisecond, PollInterval: time.Millisecond, Extensions: []string{".mkv"}},
+		logger:    log.New(io.Discard, "", 0),
+		scheduler: queue.New(queue.Options{MaxParallel: 1}),
+		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
+		retryDue:  map[string]time.Time{},
+		wakeCh:    make(chan struct{}, 1),
+		now: func() time.Time {
+			return time.Date(2026, 4, 23, 10, 0, 1, 0, time.UTC)
+		},
+	}
+	s.afterMarkDirty = func(key string) {
+		if !s.scheduler.TryStart(key) {
+			t.Fatal("TryStart() = false, want true")
+		}
+	}
+
+	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
+
+	if len(s.recentEvents) != 1 {
+		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
+	}
+	if got := s.recentEvents[0].message; got != "[MOVIE] 检测到新文件，任务标记为待上传" {
+		t.Fatalf("recentEvents[0].message = %q, want runtime queue event even if dispatch wins race", got)
+	}
+}
+
 func TestProcessFileDoesNotRecordQueueEventWhilePendingRetry(t *testing.T) {
 	t.Parallel()
 
@@ -413,6 +455,7 @@ func TestProcessFileDoesNotRecordQueueEventWhilePendingRetry(t *testing.T) {
 		t.Fatal("TryStart() = false, want true")
 	}
 	s.scheduler.FinishFailed(job.SourceDir)
+	s.retryDue[job.SourceDir] = s.currentTime().Add(time.Minute)
 
 	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
 
@@ -491,7 +534,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		s := newTestService()
 		s.cfg.RetryInterval = time.Minute
 		s.now = func() time.Time { return at }
-		s.copyJob = func(context.Context, string, string, []string) error { return nil }
+		s.copyJob = func(context.Context, *jobRuntime) error { return nil }
 		s.cleanupLinkDir = func(string) error { return nil }
 		job := &jobRuntime{
 			cfg:    config.JobConfig{Name: "MOVIE", LinkDir: "/link"},
@@ -535,7 +578,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 
 	t.Run("copy failure enters retry", func(t *testing.T) {
 		s, job := makeService(time.Date(2026, 4, 23, 10, 0, 6, 0, time.UTC))
-		s.copyJob = func(context.Context, string, string, []string) error { return errors.New("copy failed") }
+		s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
 
 		s.runUpload(context.Background(), job)
 
@@ -546,6 +589,66 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 			t.Fatalf("recentEvents[0].message = %q, want failure event", got)
 		}
 	})
+
+	t.Run("cleanup failure enters retry", func(t *testing.T) {
+		s, job := makeService(time.Date(2026, 4, 23, 10, 0, 7, 0, time.UTC))
+		s.cleanupLinkDir = func(string) error { return errors.New("cleanup failed") }
+
+		s.runUpload(context.Background(), job)
+
+		if len(s.recentEvents) != 1 {
+			t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
+		}
+		if got := s.recentEvents[0].message; got != "[MOVIE] 上传失败，进入重试等待" {
+			t.Fatalf("recentEvents[0].message = %q, want cleanup failure retry event", got)
+		}
+	})
+}
+
+func TestRunUploadBindsRcloneOutputToJob(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.now = func() time.Time {
+		return time.Date(2026, 4, 23, 10, 0, 8, 0, time.UTC)
+	}
+	job := &jobRuntime{
+		cfg:    config.JobConfig{Name: "MOVIE", LinkDir: "/root/child"},
+		key:    "/source",
+		active: true,
+	}
+	s.jobs["/other"] = &jobRuntime{
+		cfg: config.JobConfig{Name: "OTHER", LinkDir: "/root"},
+		key: "/other",
+	}
+	s.jobs[job.key] = job
+	s.copyJob = func(ctx context.Context, gotJob *jobRuntime) error {
+		if gotJob != job {
+			t.Fatalf("copyJob job = %#v, want %#v", gotJob, job)
+		}
+		s.handleRcloneOutputLine(gotJob, "2026/04/23 10:00:08 INFO  : nested/file.mkv: Copied (new)", s.now)
+		return nil
+	}
+	s.cleanupLinkDir = func(string) error { return nil }
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if len(s.recentEvents) < 1 {
+		t.Fatalf("len(recentEvents) = %d, want at least 1", len(s.recentEvents))
+	}
+	found := false
+	for _, event := range s.recentEvents {
+		if event.message == "nested/file.mkv: Copied (new)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("recentEvents = %#v, want bound rclone event on target job", s.recentEvents)
+	}
 }
 
 func TestReleaseRetriesRecordsRequeueEvent(t *testing.T) {
@@ -571,6 +674,32 @@ func TestReleaseRetriesRecordsRequeueEvent(t *testing.T) {
 	}
 	if got := s.recentEvents[0].message; got != "[MOVIE] 到达重试时间，重新排队" {
 		t.Fatalf("recentEvents[0].message = %q, want retry requeue event", got)
+	}
+}
+
+func TestReleaseRetriesDoesNotRecordEventBeforeDueTime(t *testing.T) {
+	t.Parallel()
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link"}
+	s := newTestService()
+	s.now = func() time.Time {
+		return time.Date(2026, 4, 23, 10, 0, 9, 0, time.UTC)
+	}
+	s.jobs[job.SourceDir] = &jobRuntime{cfg: job, key: job.SourceDir}
+	s.scheduler.MarkDirty(job.SourceDir)
+	if !s.scheduler.TryStart(job.SourceDir) {
+		t.Fatal("TryStart() = false, want true")
+	}
+	s.scheduler.FinishFailed(job.SourceDir)
+	s.retryDue[job.SourceDir] = s.currentTime().Add(time.Minute)
+
+	s.releaseRetries()
+
+	if len(s.recentEvents) != 0 {
+		t.Fatalf("len(recentEvents) = %d, want 0", len(s.recentEvents))
+	}
+	if ready := s.scheduler.Ready(); len(ready) != 0 {
+		t.Fatalf("Ready() = %v, want [] before retry due", ready)
 	}
 }
 

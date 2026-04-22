@@ -31,9 +31,10 @@ type Service struct {
 	mkdirAll       func(string, os.FileMode) error
 	addWatches     func(string) error
 	scanExisting   func(string, string, []string, time.Duration) (int, error)
-	copyJob        func(context.Context, string, string, []string) error
+	copyJob        func(context.Context, *jobRuntime) error
 	cleanupLinkDir func(string) error
 	startUpload    func(context.Context, *jobRuntime)
+	afterMarkDirty func(string)
 	now            func() time.Time
 
 	mu           sync.Mutex
@@ -144,6 +145,7 @@ func (s *Service) startupCatchUp() error {
 		if count > 0 {
 			wasQueued := s.isJobReady(job.key)
 			s.scheduler.MarkDirty(job.key)
+			s.runAfterMarkDirty(job.key)
 			if !wasQueued {
 				s.appendSchedulerEventNow(job, fmt.Sprintf("启动扫描发现 %d 个文件，任务标记为待上传", count))
 			}
@@ -249,12 +251,13 @@ func (s *Service) processFile(ctx context.Context, job *jobRuntime, path string)
 	s.mu.Unlock()
 
 	wasQueued := s.isJobReady(job.key)
+	wasPendingRetry := s.isRetryWaiting(job.key)
 	s.scheduler.MarkDirty(job.key)
-	isQueued := s.isJobReady(job.key)
+	s.runAfterMarkDirty(job.key)
 	if wasActive && !wasDirtyDuringRun {
 		s.appendSchedulerEventNow(job, "检测到新文件，任务保持运行中，完成后将重新排队")
 	}
-	if !wasActive && !wasQueued && isQueued {
+	if !wasActive && !wasQueued && !wasPendingRetry {
 		s.appendSchedulerEventNow(job, "检测到新文件，任务标记为待上传")
 	}
 	s.signalWake()
@@ -317,7 +320,7 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 }
 
 func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
-	err := s.copyJob(ctx, job.cfg.LinkDir, job.cfg.RcloneRemote, s.cfg.RcloneArgs)
+	err := s.copyJob(ctx, job)
 	if err != nil {
 		s.mu.Lock()
 		job.active = false
@@ -360,18 +363,15 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	s.signalWake()
 }
 
-func (s *Service) copyWithRclone(ctx context.Context, linkDir, remote string, args []string) error {
+func (s *Service) copyWithRclone(ctx context.Context, job *jobRuntime) error {
 	exec := &rclone.CommandExecutor{
 		Proxy: s.cfg.Proxy,
 		OnOutput: func(line string) {
-			job := s.findJobByLinkDir(linkDir)
-			if job != nil {
-				s.handleRcloneOutputLine(job, line, time.Now)
-			}
+			s.handleRcloneOutputLine(job, line, time.Now)
 		},
 	}
 	runner := rclone.NewRunner(exec)
-	return runner.Copy(ctx, linkDir, remote, args)
+	return runner.Copy(ctx, job.cfg.LinkDir, job.cfg.RcloneRemote, s.cfg.RcloneArgs)
 }
 
 func (s *Service) uiLoop(ctx context.Context) {
@@ -502,17 +502,6 @@ func (s *Service) findJob(path string) *jobRuntime {
 	return nil
 }
 
-func (s *Service) findJobByLinkDir(path string) *jobRuntime {
-	cleanPath := filepath.Clean(path)
-	for _, job := range s.jobs {
-		linkDir := filepath.Clean(job.cfg.LinkDir)
-		if cleanPath == linkDir || strings.HasPrefix(cleanPath, linkDir+string(os.PathSeparator)) {
-			return job
-		}
-	}
-	return nil
-}
-
 func (s *Service) addRecursiveWatches(root string) error {
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -539,6 +528,19 @@ func (s *Service) isJobReady(key string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Service) isRetryWaiting(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.retryDue[key]
+	return ok
+}
+
+func (s *Service) runAfterMarkDirty(key string) {
+	if s.afterMarkDirty != nil {
+		s.afterMarkDirty(key)
+	}
 }
 
 func hasAllowedExtension(path string, extensions []string) bool {
