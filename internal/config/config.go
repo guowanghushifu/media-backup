@@ -86,12 +86,6 @@ func normalizeConfig(cfg *Config) {
 	for i := range cfg.Extensions {
 		cfg.Extensions[i] = strings.ToLower(cfg.Extensions[i])
 	}
-	for i := range cfg.Jobs {
-		cfg.Jobs[i].Name = strings.TrimSpace(cfg.Jobs[i].Name)
-		cfg.Jobs[i].SourceDir = strings.TrimSpace(cfg.Jobs[i].SourceDir)
-		cfg.Jobs[i].LinkDir = strings.TrimSpace(cfg.Jobs[i].LinkDir)
-		cfg.Jobs[i].RcloneRemote = strings.TrimSpace(cfg.Jobs[i].RcloneRemote)
-	}
 }
 
 func validateConfig(cfg *Config) error {
