@@ -17,39 +17,40 @@ Supported media extensions by default:
 
 ## Configuration
 
-The program reads a YAML configuration file. Global options stay minimal. Each source directory maps to exactly one hard-link directory and one `rclone` destination.
+The program reads a YAML configuration file. Runtime tuning options are defined globally. Each source directory maps to exactly one hard-link directory and one `rclone` destination.
 
 Example:
 
 ```yaml
 poll_interval: 1s
+stable_duration: 60s
+retry_interval: 10m
+extensions: [".mkv", ".mp4", ".m2ts", ".ts"]
+rclone_args:
+  - --drive-chunk-size=256M
+  - --checkers=5
+  - --transfers=5
+  - --drive-stop-on-upload-limit
+  - --stats=1s
+  - --stats-one-line
+  - -v
 
 jobs:
   - name: 4k-remux-sgnb
     source_dir: /dld/upload/4K.REMUX.SGNB
     link_dir: /dld/gd_upload/4K.REMUX.SGNB
     rclone_remote: gd1:/sync/Movie/4K.REMUX.SGNB
-    stable_duration: 60s
-    retry_interval: 10m
-    extensions: [".mkv", ".mp4", ".m2ts", ".ts"]
-    rclone_args:
-      - --drive-chunk-size=256M
-      - --checkers=5
-      - --transfers=5
-      - --drive-stop-on-upload-limit
-      - --stats=1s
-      - --stats-one-line
-      - -v
 ```
 
 Configuration rules:
 
 - `source_dir`, `link_dir`, and `rclone_remote` are required.
 - One `source_dir` corresponds to one unique `link_dir` and one unique `rclone_remote`.
-- If `extensions` is omitted, use the default extension list above.
-- If `stable_duration` is omitted, default to `60s`.
-- If `retry_interval` is omitted, default to `10m`.
-- If `rclone_args` is omitted, use a safe default matching the sample above.
+- Each job entry only defines `name`, `source_dir`, `link_dir`, and `rclone_remote`.
+- `extensions` is a global setting. If omitted, use the default extension list above.
+- `stable_duration` is a global setting. If omitted, default to `60s`.
+- `retry_interval` is a global setting. If omitted, default to `10m`.
+- `rclone_args` is a global setting. If omitted, use a safe default matching the sample above.
 
 ## Runtime Model
 
