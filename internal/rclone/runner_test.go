@@ -2,6 +2,7 @@ package rclone
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -24,6 +25,19 @@ func TestRunnerBuildsCommand(t *testing.T) {
 		if exec.Args[i] != want[i] {
 			t.Fatalf("command arg[%d] = %q, want %q", i, exec.Args[i], want[i])
 		}
+	}
+}
+
+func TestRunnerForwardsExecutorError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("copy failed")
+	exec := &RecordingExecutor{Err: wantErr}
+	runner := NewRunner(exec)
+
+	err := runner.Copy(context.Background(), "/links/movies", "remote:movies", nil)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Copy() error = %v, want %v", err, wantErr)
 	}
 }
 

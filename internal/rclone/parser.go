@@ -5,13 +5,9 @@ import "strings"
 const transferredPrefix = "Transferred:"
 
 func ParseStats(line string) (string, bool) {
-	if !strings.HasPrefix(line, transferredPrefix) {
+	line = strings.TrimSpace(line)
+	if !strings.Contains(line, transferredPrefix) {
 		return "", false
 	}
-
-	stats := strings.TrimSpace(strings.TrimPrefix(line, transferredPrefix))
-	if stats == "" {
-		return "", false
-	}
-	return stats, true
+	return line, true
 }
