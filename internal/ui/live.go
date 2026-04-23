@@ -10,16 +10,18 @@ import (
 const (
 	enterAlternateScreen = "\x1b[?1049h"
 	leaveAlternateScreen = "\x1b[?1049l"
+	hideCursor           = "\x1b[?25l"
+	showCursor           = "\x1b[?25h"
 	repaintFromHome      = "\x1b[H\x1b[J"
 	defaultWidth         = 80
 )
 
 func EnterAlternateScreen() string {
-	return enterAlternateScreen
+	return enterAlternateScreen + hideCursor
 }
 
 func LeaveAlternateScreen() string {
-	return leaveAlternateScreen
+	return showCursor + leaveAlternateScreen
 }
 
 func RewriteFrame(content string) string {

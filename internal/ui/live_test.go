@@ -5,16 +5,16 @@ import "testing"
 func TestEnterAlternateScreen(t *testing.T) {
 	t.Parallel()
 
-	if got := EnterAlternateScreen(); got != "\x1b[?1049h" {
-		t.Fatalf("EnterAlternateScreen() = %q, want %q", got, "\x1b[?1049h")
+	if got := EnterAlternateScreen(); got != "\x1b[?1049h\x1b[?25l" {
+		t.Fatalf("EnterAlternateScreen() = %q, want %q", got, "\x1b[?1049h\x1b[?25l")
 	}
 }
 
 func TestLeaveAlternateScreen(t *testing.T) {
 	t.Parallel()
 
-	if got := LeaveAlternateScreen(); got != "\x1b[?1049l" {
-		t.Fatalf("LeaveAlternateScreen() = %q, want %q", got, "\x1b[?1049l")
+	if got := LeaveAlternateScreen(); got != "\x1b[?25h\x1b[?1049l" {
+		t.Fatalf("LeaveAlternateScreen() = %q, want %q", got, "\x1b[?25h\x1b[?1049l")
 	}
 }
 
