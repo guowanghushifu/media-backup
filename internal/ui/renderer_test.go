@@ -15,12 +15,12 @@ func TestRenderIdle(t *testing.T) {
 	now := time.Date(2026, 4, 22, 15, 4, 5, 0, time.UTC)
 	want := strings.Join([]string{
 		"┌──────────────────────────────────────────────────────────────────────────────┐",
-		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
-		"│ │ STATE IDLE  ACTIVE 0/0  QUEUE 0  UPDATED 15:04:05                        │ │",
+		"│ ┌─ 系统状态 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 状态 空闲  活动 0/0  排队 0  更新 15:04:05                               │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
-		"│ │ No active transfers                                                      │ │",
+		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 暂无活动任务                                                             │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -32,8 +32,8 @@ func TestRenderIdle(t *testing.T) {
 		"│ │                                                                          │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ RECENT EVENTS (0) ──────────────────────────────────────────────────────┐ │",
-		"│ │ Watching for new files...                                                │ │",
+		"│ ┌─ 最近事件 (0) ───────────────────────────────────────────────────────────┐ │",
+		"│ │ 正在等待新文件...                                                        │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -73,14 +73,14 @@ func TestRenderActiveDashboard(t *testing.T) {
 	)
 	wantLines := []string{
 		"┌──────────────────────────────────────────────────────────────────────────────┐",
-		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
-		"│ │ STATE RUNNING  ACTIVE 2/5  QUEUE 1  UPDATED 15:04:05                     │ │",
+		"│ ┌─ 系统状态 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 状态 运行中  活动 2/5  排队 1  更新 15:04:05                             │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
-		"│ │ NAME              PROGRESS  SPEED             ETA           STATUS       │ │",
-		"│ │ job-a             83%       29.793 MiB/s      ETA 00:05     COPYING      │ │",
-		"│ │ job-b             31%       48.2 MiB/s        ETA 09:12     COPYING      │ │",
+		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 名称              进度      速度              预计           状态        │ │",
+		"│ │ job-a             83%       29.793 MiB/s      预计 00:05     传输中      │ │",
+		"│ │ job-b             31%       48.2 MiB/s        预计 09:12     传输中      │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -90,9 +90,9 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ │                                                                          │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ RECENT EVENTS (2) ──────────────────────────────────────────────────────┐ │",
-		"│ │ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
-		"│ │ 15:03:58  DONE    THIS_IS_TEST/file-01.mkv: Copied (new)                 │ │",
+		"│ ┌─ 最近事件 (2) ───────────────────────────────────────────────────────────┐ │",
+		"│ │ 15:04:03  完成    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
+		"│ │ 15:03:58  完成    THIS_IS_TEST/file-01.mkv: Copied (new)                 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -134,12 +134,12 @@ func TestRenderDashboardIdleIncludesRecentEvents(t *testing.T) {
 	)
 	want := strings.Join([]string{
 		"┌──────────────────────────────────────────────────────────────────────────────┐",
-		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
-		"│ │ STATE IDLE  ACTIVE 0/5  QUEUE 0  UPDATED 15:04:05                        │ │",
+		"│ ┌─ 系统状态 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 状态 空闲  活动 0/5  排队 0  更新 15:04:05                               │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
-		"│ │ No active transfers                                                      │ │",
+		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 暂无活动任务                                                             │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -151,8 +151,8 @@ func TestRenderDashboardIdleIncludesRecentEvents(t *testing.T) {
 		"│ │                                                                          │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ RECENT EVENTS (1) ──────────────────────────────────────────────────────┐ │",
-		"│ │ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
+		"│ ┌─ 最近事件 (1) ───────────────────────────────────────────────────────────┐ │",
+		"│ │ 15:04:03  完成    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -182,12 +182,12 @@ func TestRenderDashboardShowsQueuedStatusWithoutActiveJobs(t *testing.T) {
 	)
 	want := strings.Join([]string{
 		"┌──────────────────────────────────────────────────────────────────────────────┐",
-		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
-		"│ │ STATE QUEUED  ACTIVE 0/5  QUEUE 3  UPDATED 15:04:05                      │ │",
+		"│ ┌─ 系统状态 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 状态 排队中  活动 0/5  排队 3  更新 15:04:05                             │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
-		"│ │ No active transfers                                                      │ │",
+		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 暂无活动任务                                                             │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -199,8 +199,8 @@ func TestRenderDashboardShowsQueuedStatusWithoutActiveJobs(t *testing.T) {
 		"│ │                                                                          │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ RECENT EVENTS (0) ──────────────────────────────────────────────────────┐ │",
-		"│ │ Watching for new files...                                                │ │",
+		"│ ┌─ 最近事件 (0) ───────────────────────────────────────────────────────────┐ │",
+		"│ │ 正在等待新文件...                                                        │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -232,13 +232,13 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 	)
 	want := strings.Join([]string{
 		"┌──────────────────────────────────────────────────────────────────────────────┐",
-		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
-		"│ │ STATE RUNNING  ACTIVE 1/5  QUEUE 0  UPDATED 15:04:05                     │ │",
+		"│ ┌─ 系统状态 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 状态 运行中  活动 1/5  排队 0  更新 15:04:05                             │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
-		"│ │ NAME              PROGRESS  SPEED             ETA           STATUS       │ │",
-		"│ │ job-a             83%       29.793 MiB/s      ETA 00:05     COPYING      │ │",
+		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
+		"│ │ 名称              进度      速度              预计           状态        │ │",
+		"│ │ job-a             83%       29.793 MiB/s      预计 00:05     传输中      │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -249,8 +249,8 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		"│ │                                                                          │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
-		"│ ┌─ RECENT EVENTS (0) ──────────────────────────────────────────────────────┐ │",
-		"│ │ Watching for new files...                                                │ │",
+		"│ ┌─ 最近事件 (0) ───────────────────────────────────────────────────────────┐ │",
+		"│ │ 正在等待新文件...                                                        │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -275,9 +275,9 @@ func TestRenderDashboardUsesFramedPanelTitles(t *testing.T) {
 	out := ui.RenderDashboard(now, nil, nil, 0, 3)
 
 	for _, want := range []string{
-		"SYSTEM STATUS",
-		"ACTIVE JOBS",
-		"RECENT EVENTS",
+		"系统状态",
+		"活动任务",
+		"最近事件",
 		"┌",
 		"└",
 	} {
@@ -302,7 +302,7 @@ func TestRenderDashboardUsesUniformPanelWidth(t *testing.T) {
 	var widths []int
 	for _, line := range lines {
 		if strings.HasPrefix(line, "┌") || strings.HasPrefix(line, "└") || strings.HasPrefix(line, "│ ┌") || strings.HasPrefix(line, "│ └") {
-			widths = append(widths, utf8.RuneCountInString(line))
+			widths = append(widths, displayWidth(line))
 		}
 	}
 
@@ -332,16 +332,16 @@ func TestRenderDashboardShowsMetricSummaryAndStructuredJobs(t *testing.T) {
 	)
 
 	for _, want := range []string{
-		"STATE RUNNING",
-		"ACTIVE 2/5",
-		"QUEUE 2",
-		"UPDATED 09:30:00",
+		"状态 运行中",
+		"活动 2/5",
+		"排队 2",
+		"更新 09:30:00",
 		"movies-a",
 		"83%",
 		"29.8 MiB/s",
-		"ETA 00:05",
+		"预计 00:05",
 		"anime-b",
-		"WAITING",
+		"等待中",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderDashboard() missing %q in %q", want, out)
@@ -364,7 +364,7 @@ func TestRenderDashboardShowsTaggedRecentEventsNewestFirst(t *testing.T) {
 		5,
 	)
 
-	if !strings.Contains(out, "RECENT EVENTS (2)") {
+	if !strings.Contains(out, "最近事件 (2)") {
 		t.Fatalf("RenderDashboard() missing event count in %q", out)
 	}
 	first := strings.Index(out, "09:29:59")
@@ -372,7 +372,7 @@ func TestRenderDashboardShowsTaggedRecentEventsNewestFirst(t *testing.T) {
 	if first == -1 || second == -1 || first > second {
 		t.Fatalf("RenderDashboard() event order is not newest first: %q", out)
 	}
-	for _, want := range []string{"DONE", "SCAN", "THIS_IS_TEST/file-02.mkv", "[movie] 启动扫描发现 3 个文件"} {
+	for _, want := range []string{"完成", "扫描", "THIS_IS_TEST/file-02.mkv", "[movie] 启动扫描发现 3 个文件"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderDashboard() missing %q in %q", want, out)
 		}
@@ -393,11 +393,11 @@ func TestRenderDashboardTagsFailureEventsBeforeRetryQueue(t *testing.T) {
 		5,
 	)
 
-	if !strings.Contains(out, "09:29:59  FAIL") {
-		t.Fatalf("RenderDashboard() missing FAIL tag for retrying failure event in %q", out)
+	if !strings.Contains(out, "09:29:59  失败") {
+		t.Fatalf("RenderDashboard() missing failure tag for retrying failure event in %q", out)
 	}
-	if strings.Contains(out, "09:29:59  QUEUE") {
-		t.Fatalf("RenderDashboard() mis-tagged retrying failure event as QUEUE in %q", out)
+	if strings.Contains(out, "09:29:59  排队") {
+		t.Fatalf("RenderDashboard() mis-tagged retrying failure event as queue in %q", out)
 	}
 }
 
@@ -415,11 +415,11 @@ func TestRenderDashboardTagsSuccessfulRequeueEventsAsDone(t *testing.T) {
 		5,
 	)
 
-	if !strings.Contains(out, "09:29:59  DONE") {
-		t.Fatalf("RenderDashboard() missing DONE tag for successful requeue event in %q", out)
+	if !strings.Contains(out, "09:29:59  完成") {
+		t.Fatalf("RenderDashboard() missing done tag for successful requeue event in %q", out)
 	}
-	if strings.Contains(out, "09:29:59  QUEUE") {
-		t.Fatalf("RenderDashboard() mis-tagged successful requeue event as QUEUE in %q", out)
+	if strings.Contains(out, "09:29:59  排队") {
+		t.Fatalf("RenderDashboard() mis-tagged successful requeue event as queue in %q", out)
 	}
 }
 
@@ -462,7 +462,7 @@ func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "动漫-b") {
 			got := strings.TrimRight(stripNestedFrameLine(line), " ")
-			want := "动漫-b            83%       29.8 MiB/s        ETA 00:05     COPYING"
+			want := "动漫-b            83%       29.8 MiB/s        预计 00:05     传输中"
 			if got != want {
 				t.Fatalf("wide-character row = %q, want %q", got, want)
 			}
@@ -487,7 +487,7 @@ func TestRenderDashboardFormatsHourETAInStructuredJobs(t *testing.T) {
 		5,
 	)
 
-	if !strings.Contains(out, "ETA 01:02:03") {
+	if !strings.Contains(out, "预计 01:02:03") {
 		t.Fatalf("RenderDashboard() missing hour ETA format in %q", out)
 	}
 }
@@ -511,7 +511,7 @@ func TestRenderDashboardKeepsActiveJobColumnsAlignedForRuntimeValues(t *testing.
 	var header string
 	var rows []string
 	for _, line := range lines {
-		if strings.Contains(line, "NAME") && strings.Contains(line, "PROGRESS") && strings.Contains(line, "STATUS") {
+		if strings.Contains(line, "名称") && strings.Contains(line, "进度") && strings.Contains(line, "状态") {
 			header = stripNestedFrameLine(line)
 			continue
 		}
@@ -561,7 +561,7 @@ func TestRenderDashboardTruncatesLongJobNamesWithoutShiftingColumns(t *testing.T
 	var header string
 	var rows []string
 	for _, line := range lines {
-		if strings.Contains(line, "NAME") && strings.Contains(line, "PROGRESS") && strings.Contains(line, "STATUS") {
+		if strings.Contains(line, "名称") && strings.Contains(line, "进度") && strings.Contains(line, "状态") {
 			header = stripNestedFrameLine(line)
 			continue
 		}
@@ -618,7 +618,7 @@ func TestRenderDashboardShowsMonthDayTimeForOlderEvents(t *testing.T) {
 		5,
 	)
 
-	if !strings.Contains(out, "04-22 23:59  INFO") {
+	if !strings.Contains(out, "04-22 23:59  信息") {
 		t.Fatalf("RenderDashboard() missing non-same-day timestamp fallback in %q", out)
 	}
 }

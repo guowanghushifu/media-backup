@@ -10,7 +10,7 @@ const (
 	activeJobNameWidth     = 16
 	activeJobProgressWidth = 8
 	activeJobSpeedWidth    = 16
-	activeJobETAWidth      = 12
+	activeJobETAWidth      = 13
 	minActiveJobRows       = 10
 	minEventRows           = 10
 	minDashboardWidth      = 9
@@ -60,16 +60,17 @@ func RenderDashboardWithWidth(now time.Time, active []JobStatus, events []EventR
 }
 
 func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel int) (string, []string) {
-	state := "IDLE"
+	state := "空闲"
 	if activeCount > 0 {
-		state = "RUNNING"
+		state = "运行中"
 	} else if waiting > 0 {
-		state = "QUEUED"
+		state = "排队中"
 	}
 
-	return "SYSTEM STATUS", []string{
-		fmt.Sprintf("%s  ACTIVE %d/%d  QUEUE %d  UPDATED %s",
-			"STATE "+state,
+	return "系统状态", []string{
+		fmt.Sprintf("%s %s  活动 %d/%d  排队 %d  更新 %s",
+			"状态",
+			state,
 			activeCount,
 			maxParallel,
 			waiting,
@@ -80,15 +81,15 @@ func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel
 
 func renderActiveJobsPanel(active []JobStatus) (string, []string) {
 	if len(active) == 0 {
-		return "ACTIVE JOBS", []string{"No active transfers"}
+		return "活动任务", []string{"暂无活动任务"}
 	}
 
-	rows := []string{formatActiveJobRow("NAME", "PROGRESS", "SPEED", "ETA", "STATUS")}
+	rows := []string{formatActiveJobRow("名称", "进度", "速度", "预计", "状态")}
 	for _, job := range active {
 		progress, speed, eta, state := parseJobSummary(job.Summary)
 		rows = append(rows, formatActiveJobRow(job.Name, progress, speed, eta, state))
 	}
-	return "ACTIVE JOBS", rows
+	return "活动任务", rows
 }
 
 func formatActiveJobRow(name string, progress string, speed string, eta string, state string) string {
@@ -109,7 +110,7 @@ func parseJobSummary(summary string) (progress string, speed string, eta string,
 	progress = "-"
 	speed = "-"
 	eta = "-"
-	state = "WAITING"
+	state = "等待中"
 
 	parts := strings.Split(summary, ", ")
 	if len(parts) < 4 {
@@ -119,7 +120,7 @@ func parseJobSummary(summary string) (progress string, speed string, eta string,
 	progress = parts[1]
 	speed = parts[2]
 	eta = formatETA(parts[3])
-	state = "COPYING"
+	state = "传输中"
 	return progress, speed, eta, state
 }
 
@@ -135,38 +136,38 @@ func formatETA(raw string) string {
 	minutes := (totalSeconds % 3600) / 60
 	seconds := totalSeconds % 60
 	if hours > 0 {
-		return fmt.Sprintf("ETA %02d:%02d:%02d", hours, minutes, seconds)
+		return fmt.Sprintf("预计 %02d:%02d:%02d", hours, minutes, seconds)
 	}
-	return fmt.Sprintf("ETA %02d:%02d", minutes, seconds)
+	return fmt.Sprintf("预计 %02d:%02d", minutes, seconds)
 }
 
 func renderEventsPanel(now time.Time, events []EventRecord) (string, []string) {
 	if len(events) == 0 {
-		return "RECENT EVENTS (0)", []string{"Watching for new files..."}
+		return "最近事件 (0)", []string{"正在等待新文件..."}
 	}
 
 	rows := make([]string, 0, len(events))
 	for _, event := range events {
 		tag, message := classifyEvent(event.Message)
-		rows = append(rows, fmt.Sprintf("%s  %-6s  %s", formatEventTime(now, event.At), tag, message))
+		rows = append(rows, fmt.Sprintf("%s  %s  %s", formatEventTime(now, event.At), padDisplayCell(tag, 6), message))
 	}
-	return fmt.Sprintf("RECENT EVENTS (%d)", len(events)), rows
+	return fmt.Sprintf("最近事件 (%d)", len(events)), rows
 }
 
 func classifyEvent(message string) (string, string) {
 	switch {
 	case strings.Contains(message, "Copied (new)"):
-		return "DONE", message
+		return "完成", message
 	case strings.Contains(message, "启动扫描发现"), strings.Contains(message, "链接目录发现"), strings.Contains(message, "检测到新文件"):
-		return "SCAN", message
+		return "扫描", message
 	case strings.Contains(message, "上传失败"):
-		return "FAIL", message
+		return "失败", message
 	case strings.Contains(message, "上传完成"):
-		return "DONE", message
+		return "完成", message
 	case strings.Contains(message, "调度开始上传"), strings.Contains(message, "重新排队"), strings.Contains(message, "重试"):
-		return "QUEUE", message
+		return "排队", message
 	default:
-		return "INFO", message
+		return "信息", message
 	}
 }
 
