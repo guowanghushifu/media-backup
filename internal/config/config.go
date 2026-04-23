@@ -24,14 +24,16 @@ var (
 )
 
 type Config struct {
-	PollInterval       time.Duration `yaml:"poll_interval"`
-	StableDuration     time.Duration `yaml:"stable_duration"`
-	RetryInterval      time.Duration `yaml:"retry_interval"`
-	MaxParallelUploads int           `yaml:"max_parallel_uploads"`
-	Extensions         []string      `yaml:"extensions"`
-	RcloneArgs         []string      `yaml:"rclone_args"`
-	Proxy              ProxyConfig   `yaml:"proxy"`
-	Jobs               []JobConfig   `yaml:"jobs"`
+	PollInterval       time.Duration  `yaml:"poll_interval"`
+	StableDuration     time.Duration  `yaml:"stable_duration"`
+	RetryInterval      time.Duration  `yaml:"retry_interval"`
+	MaxRetryCount      int            `yaml:"max_retry_count"`
+	MaxParallelUploads int            `yaml:"max_parallel_uploads"`
+	Extensions         []string       `yaml:"extensions"`
+	RcloneArgs         []string       `yaml:"rclone_args"`
+	Proxy              ProxyConfig    `yaml:"proxy"`
+	Telegram           TelegramConfig `yaml:"telegram"`
+	Jobs               []JobConfig    `yaml:"jobs"`
 }
 
 type ProxyConfig struct {
@@ -48,6 +50,12 @@ type JobConfig struct {
 	SourceDir    string `yaml:"source_dir"`
 	LinkDir      string `yaml:"link_dir"`
 	RcloneRemote string `yaml:"rclone_remote"`
+}
+
+type TelegramConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	BotToken string `yaml:"bot_token"`
+	ChatID   string `yaml:"chat_id"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -100,9 +108,24 @@ func normalizeConfig(cfg *Config) {
 	cfg.Proxy.Host = strings.TrimSpace(cfg.Proxy.Host)
 	cfg.Proxy.Username = strings.TrimSpace(cfg.Proxy.Username)
 	cfg.Proxy.Password = strings.TrimSpace(cfg.Proxy.Password)
+	cfg.Telegram.BotToken = strings.TrimSpace(cfg.Telegram.BotToken)
+	cfg.Telegram.ChatID = strings.TrimSpace(cfg.Telegram.ChatID)
 }
 
 func validateConfig(cfg *Config) error {
+	if cfg.MaxRetryCount < 0 {
+		return errors.New("max_retry_count must be greater than or equal to 0")
+	}
+
+	if cfg.Telegram.Enabled {
+		if cfg.Telegram.BotToken == "" {
+			return errors.New("telegram bot_token is required")
+		}
+		if cfg.Telegram.ChatID == "" {
+			return errors.New("telegram chat_id is required")
+		}
+	}
+
 	if cfg.Proxy.Enabled {
 		if cfg.Proxy.Scheme != "http" && cfg.Proxy.Scheme != "https" {
 			return errors.New("proxy scheme must be http or https")

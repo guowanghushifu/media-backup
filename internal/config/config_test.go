@@ -52,6 +52,95 @@ jobs:
 	assertEqualStringSlice(t, "RcloneArgs", cfg.RcloneArgs, wantRcloneArgs)
 }
 
+func TestLoadConfigDefaultsMaxRetryCountToZero(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.MaxRetryCount != 0 {
+		t.Fatalf("MaxRetryCount = %d, want 0", cfg.MaxRetryCount)
+	}
+}
+
+func TestLoadConfigAcceptsDisabledTelegramWithoutCredentials(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+max_retry_count: 5
+telegram:
+  enabled: false
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.Telegram.Enabled {
+		t.Fatal("Telegram.Enabled = true, want false")
+	}
+}
+
+func TestLoadConfigRejectsEnabledTelegramMissingBotToken(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+telegram:
+  enabled: true
+  chat_id: -1001234567890
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want telegram bot token validation error")
+	}
+	if !strings.Contains(err.Error(), "telegram bot_token is required") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "telegram bot_token is required")
+	}
+}
+
+func TestLoadConfigRejectsEnabledTelegramMissingChatID(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+telegram:
+  enabled: true
+  bot_token: 123456:ABCDEF
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want telegram chat id validation error")
+	}
+	if !strings.Contains(err.Error(), "telegram chat_id is required") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "telegram chat_id is required")
+	}
+}
+
 func TestLoadConfigRejectsDuplicateSourceDir(t *testing.T) {
 	t.Parallel()
 
