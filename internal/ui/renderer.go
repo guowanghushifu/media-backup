@@ -21,18 +21,29 @@ func RenderIdle(now time.Time) string {
 }
 
 func RenderDashboard(now time.Time, active []JobStatus, events []EventRecord, waiting int, maxParallel int) string {
-	lines := []string{renderStatusLine(now, len(active), waiting, maxParallel)}
+	lines := panel("SYSTEM STATUS", []string{
+		renderStatusLine(now, len(active), waiting, maxParallel),
+	})
+
+	jobLines := make([]string, 0, len(active))
 	for _, job := range active {
-		lines = append(lines, fmt.Sprintf("[%s] %s", job.Name, job.Summary))
+		jobLines = append(jobLines, fmt.Sprintf("[%s] %s", job.Name, job.Summary))
 	}
-	lines = append(lines, "", "最近事件:")
+	lines = append(lines, "")
+	lines = append(lines, panel("ACTIVE JOBS", jobLines)...)
+
+	eventLines := make([]string, 0, len(events))
 	if len(events) == 0 {
-		lines = append(lines, "暂无事件")
+		eventLines = append(eventLines, "暂无事件")
+		lines = append(lines, "")
+		lines = append(lines, panel("RECENT EVENTS", eventLines)...)
 		return strings.Join(lines, "\n")
 	}
 	for _, event := range events {
-		lines = append(lines, fmt.Sprintf("[%s] %s", event.At.Format("2006-01-02 15:04:05"), event.Message))
+		eventLines = append(eventLines, fmt.Sprintf("[%s] %s", event.At.Format("2006-01-02 15:04:05"), event.Message))
 	}
+	lines = append(lines, "")
+	lines = append(lines, panel("RECENT EVENTS", eventLines)...)
 	return strings.Join(lines, "\n")
 }
 

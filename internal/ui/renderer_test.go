@@ -13,10 +13,16 @@ func TestRenderIdle(t *testing.T) {
 
 	now := time.Date(2026, 4, 22, 15, 4, 5, 0, time.UTC)
 	want := strings.Join([]string{
-		"[2026-04-22 15:04:05] 当前状态：空闲",
+		"┌─ SYSTEM STATUS ────────────────────────┐",
+		"│ [2026-04-22 15:04:05] 当前状态：空闲 │",
+		"└───────────────────────────────────────┘",
 		"",
-		"最近事件:",
-		"暂无事件",
+		"┌─ ACTIVE JOBS ─┐",
+		"└──────────────┘",
+		"",
+		"┌─ RECENT EVENTS ─┐",
+		"│ 暂无事件      │",
+		"└────────────────┘",
 	}, "\n")
 
 	if got := ui.RenderIdle(now); got != want {
@@ -43,34 +49,41 @@ func TestRenderActiveDashboard(t *testing.T) {
 		1,
 		5,
 	)
-	want := strings.Join([]string{
-		"[2026-04-22 15:04:05] 当前状态：正在传输 | 活跃任务: 2/5 | 等待中: 1",
-		"[job-a] 832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s",
-		"[job-b] 12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s",
+	wantLines := []string{
+		"┌─ SYSTEM STATUS ────────────────────────────────────────────────────────┐",
+		"│ [2026-04-22 15:04:05] 当前状态：正在传输 | 活跃任务: 2/5 | 等待中: 1 │",
+		"└───────────────────────────────────────────────────────────────────────┘",
 		"",
-		"最近事件:",
-		"[2026-04-22 15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)",
-		"[2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)",
-	}, "\n")
+		"┌─ ACTIVE JOBS ─────────────────────────────────────────────┐",
+		"│ [job-a] 832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s   │",
+		"│ [job-b] 12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s │",
+		"└──────────────────────────────────────────────────────────┘",
+		"",
+		"┌─ RECENT EVENTS ────────────────────────────────────────────────┐",
+		"│ [2026-04-22 15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new) │",
+		"│ [2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new) │",
+		"└───────────────────────────────────────────────────────────────┘",
+	}
+	want := strings.Join(wantLines, "\n")
 	if out != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
 	}
 
 	lines := strings.Split(out, "\n")
-	if len(lines) != 7 {
-		t.Fatalf("RenderDashboard() line count = %d, want 7", len(lines))
+	if len(lines) != len(wantLines) {
+		t.Fatalf("RenderDashboard() line count = %d, want %d", len(lines), len(wantLines))
 	}
-	wantLines := []string{
-		"[job-a] 832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s",
-		"[job-b] 12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s",
-		"",
-		"最近事件:",
-		"[2026-04-22 15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new)",
-		"[2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)",
+	wantBodyLines := []string{
+		wantLines[5],
+		wantLines[6],
+		wantLines[7],
+		wantLines[8],
+		wantLines[9],
+		wantLines[10],
 	}
-	for i, wantLine := range wantLines {
-		if lines[i+1] != wantLine {
-			t.Fatalf("RenderDashboard() line %d = %q, want %q", i+2, lines[i+1], wantLine)
+	for i, wantLine := range wantBodyLines {
+		if lines[i+5] != wantLine {
+			t.Fatalf("RenderDashboard() line %d = %q, want %q", i+6, lines[i+5], wantLine)
 		}
 	}
 }
@@ -88,10 +101,16 @@ func TestRenderDashboardIdleIncludesRecentEvents(t *testing.T) {
 		5,
 	)
 	want := strings.Join([]string{
-		"[2026-04-22 15:04:05] 当前状态：空闲",
+		"┌─ SYSTEM STATUS ────────────────────────┐",
+		"│ [2026-04-22 15:04:05] 当前状态：空闲 │",
+		"└───────────────────────────────────────┘",
 		"",
-		"最近事件:",
-		"[2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new)",
+		"┌─ ACTIVE JOBS ─┐",
+		"└──────────────┘",
+		"",
+		"┌─ RECENT EVENTS ────────────────────────────────────────────────┐",
+		"│ [2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new) │",
+		"└───────────────────────────────────────────────────────────────┘",
 	}, "\n")
 	if out != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -109,10 +128,16 @@ func TestRenderDashboardShowsQueuedStatusWithoutActiveJobs(t *testing.T) {
 		5,
 	)
 	want := strings.Join([]string{
-		"[2026-04-22 15:04:05] 当前状态：等待中 | 活跃任务: 0/5 | 等待中: 3",
+		"┌─ SYSTEM STATUS ──────────────────────────────────────────────────────┐",
+		"│ [2026-04-22 15:04:05] 当前状态：等待中 | 活跃任务: 0/5 | 等待中: 3 │",
+		"└─────────────────────────────────────────────────────────────────────┘",
 		"",
-		"最近事件:",
-		"暂无事件",
+		"┌─ ACTIVE JOBS ─┐",
+		"└──────────────┘",
+		"",
+		"┌─ RECENT EVENTS ─┐",
+		"│ 暂无事件      │",
+		"└────────────────┘",
 	}, "\n")
 	if out != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -132,13 +157,38 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		5,
 	)
 	want := strings.Join([]string{
-		"[2026-04-22 15:04:05] 当前状态：正在传输 | 活跃任务: 1/5 | 等待中: 0",
-		"[job-a] 832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s",
+		"┌─ SYSTEM STATUS ────────────────────────────────────────────────────────┐",
+		"│ [2026-04-22 15:04:05] 当前状态：正在传输 | 活跃任务: 1/5 | 等待中: 0 │",
+		"└───────────────────────────────────────────────────────────────────────┘",
 		"",
-		"最近事件:",
-		"暂无事件",
+		"┌─ ACTIVE JOBS ───────────────────────────────────────────┐",
+		"│ [job-a] 832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s │",
+		"└────────────────────────────────────────────────────────┘",
+		"",
+		"┌─ RECENT EVENTS ─┐",
+		"│ 暂无事件      │",
+		"└────────────────┘",
 	}, "\n")
 	if out != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
+	}
+}
+
+func TestRenderDashboardUsesFramedPanelTitles(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(now, nil, nil, 0, 3)
+
+	for _, want := range []string{
+		"SYSTEM STATUS",
+		"ACTIVE JOBS",
+		"RECENT EVENTS",
+		"┌",
+		"└",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderDashboard() missing %q in %q", want, out)
+		}
 	}
 }
