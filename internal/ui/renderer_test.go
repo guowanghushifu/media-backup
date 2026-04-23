@@ -14,17 +14,27 @@ func TestRenderIdle(t *testing.T) {
 
 	now := time.Date(2026, 4, 22, 15, 4, 5, 0, time.UTC)
 	want := strings.Join([]string{
-		"┌─ SYSTEM STATUS ─────────────────────────────────────┐",
-		"│ STATE IDLE  ACTIVE 0/0  QUEUE 0  UPDATED 15:04:05 │",
-		"└────────────────────────────────────────────────────┘",
-		"",
-		"┌─ ACTIVE JOBS ─────────┐",
-		"│ No active transfers │",
-		"└──────────────────────┘",
-		"",
-		"┌─ RECENT EVENTS (0) ─────────┐",
-		"│ Watching for new files... │",
-		"└────────────────────────────┘",
+		"┌──────────────────────────────────────────────────────────────────────────────┐",
+		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
+		"│ │ STATE IDLE  ACTIVE 0/0  QUEUE 0  UPDATED 15:04:05                        │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
+		"│ │ No active transfers                                                      │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ RECENT EVENTS (0) ──────────────────────────────────────────────────────┐ │",
+		"│ │ Watching for new files...                                                │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"└──────────────────────────────────────────────────────────────────────────────┘",
 	}, "\n")
 
 	if got := ui.RenderIdle(now); got != want {
@@ -52,20 +62,27 @@ func TestRenderActiveDashboard(t *testing.T) {
 		5,
 	)
 	wantLines := []string{
-		"┌─ SYSTEM STATUS ────────────────────────────────────────┐",
-		"│ STATE RUNNING  ACTIVE 2/5  QUEUE 1  UPDATED 15:04:05 │",
-		"└───────────────────────────────────────────────────────┘",
-		"",
-		"┌─ ACTIVE JOBS ───────────────────────────────────────────────┐",
-		"│ NAME        PROGRESS  SPEED         ETA           STATUS  │",
-		"│ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING │",
-		"│ job-b       31%       48.2 MiB/s    ETA 09:12     COPYING │",
-		"└────────────────────────────────────────────────────────────┘",
-		"",
-		"┌─ RECENT EVENTS (2) ────────────────────────────────────────┐",
-		"│ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new) │",
-		"│ 15:03:58  DONE    THIS_IS_TEST/file-01.mkv: Copied (new) │",
-		"└───────────────────────────────────────────────────────────┘",
+		"┌──────────────────────────────────────────────────────────────────────────────┐",
+		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
+		"│ │ STATE RUNNING  ACTIVE 2/5  QUEUE 1  UPDATED 15:04:05                     │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
+		"│ │ NAME        PROGRESS  SPEED         ETA           STATUS                 │ │",
+		"│ │ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING                │ │",
+		"│ │ job-b       31%       48.2 MiB/s    ETA 09:12     COPYING                │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ RECENT EVENTS (2) ──────────────────────────────────────────────────────┐ │",
+		"│ │ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
+		"│ │ 15:03:58  DONE    THIS_IS_TEST/file-01.mkv: Copied (new)                 │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"└──────────────────────────────────────────────────────────────────────────────┘",
 	}
 	want := strings.Join(wantLines, "\n")
 	if got := out; got != want {
@@ -96,17 +113,27 @@ func TestRenderDashboardIdleIncludesRecentEvents(t *testing.T) {
 		5,
 	)
 	want := strings.Join([]string{
-		"┌─ SYSTEM STATUS ─────────────────────────────────────┐",
-		"│ STATE IDLE  ACTIVE 0/5  QUEUE 0  UPDATED 15:04:05 │",
-		"└────────────────────────────────────────────────────┘",
-		"",
-		"┌─ ACTIVE JOBS ─────────┐",
-		"│ No active transfers │",
-		"└──────────────────────┘",
-		"",
-		"┌─ RECENT EVENTS (1) ────────────────────────────────────────┐",
-		"│ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new) │",
-		"└───────────────────────────────────────────────────────────┘",
+		"┌──────────────────────────────────────────────────────────────────────────────┐",
+		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
+		"│ │ STATE IDLE  ACTIVE 0/5  QUEUE 0  UPDATED 15:04:05                        │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
+		"│ │ No active transfers                                                      │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ RECENT EVENTS (1) ──────────────────────────────────────────────────────┐ │",
+		"│ │ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"└──────────────────────────────────────────────────────────────────────────────┘",
 	}, "\n")
 	if got := out; got != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -124,17 +151,27 @@ func TestRenderDashboardShowsQueuedStatusWithoutActiveJobs(t *testing.T) {
 		5,
 	)
 	want := strings.Join([]string{
-		"┌─ SYSTEM STATUS ───────────────────────────────────────┐",
-		"│ STATE QUEUED  ACTIVE 0/5  QUEUE 3  UPDATED 15:04:05 │",
-		"└──────────────────────────────────────────────────────┘",
-		"",
-		"┌─ ACTIVE JOBS ─────────┐",
-		"│ No active transfers │",
-		"└──────────────────────┘",
-		"",
-		"┌─ RECENT EVENTS (0) ─────────┐",
-		"│ Watching for new files... │",
-		"└────────────────────────────┘",
+		"┌──────────────────────────────────────────────────────────────────────────────┐",
+		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
+		"│ │ STATE QUEUED  ACTIVE 0/5  QUEUE 3  UPDATED 15:04:05                      │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
+		"│ │ No active transfers                                                      │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ RECENT EVENTS (0) ──────────────────────────────────────────────────────┐ │",
+		"│ │ Watching for new files...                                                │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"└──────────────────────────────────────────────────────────────────────────────┘",
 	}, "\n")
 	if got := out; got != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -154,18 +191,27 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		5,
 	)
 	want := strings.Join([]string{
-		"┌─ SYSTEM STATUS ────────────────────────────────────────┐",
-		"│ STATE RUNNING  ACTIVE 1/5  QUEUE 0  UPDATED 15:04:05 │",
-		"└───────────────────────────────────────────────────────┘",
-		"",
-		"┌─ ACTIVE JOBS ───────────────────────────────────────────────┐",
-		"│ NAME        PROGRESS  SPEED         ETA           STATUS  │",
-		"│ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING │",
-		"└────────────────────────────────────────────────────────────┘",
-		"",
-		"┌─ RECENT EVENTS (0) ─────────┐",
-		"│ Watching for new files... │",
-		"└────────────────────────────┘",
+		"┌──────────────────────────────────────────────────────────────────────────────┐",
+		"│ ┌─ SYSTEM STATUS ──────────────────────────────────────────────────────────┐ │",
+		"│ │ STATE RUNNING  ACTIVE 1/5  QUEUE 0  UPDATED 15:04:05                     │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
+		"│ │ NAME        PROGRESS  SPEED         ETA           STATUS                 │ │",
+		"│ │ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING                │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"│                                                                              │",
+		"│ ┌─ RECENT EVENTS (0) ──────────────────────────────────────────────────────┐ │",
+		"│ │ Watching for new files...                                                │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ │                                                                          │ │",
+		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
+		"└──────────────────────────────────────────────────────────────────────────────┘",
 	}, "\n")
 	if got := out; got != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -187,6 +233,35 @@ func TestRenderDashboardUsesFramedPanelTitles(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderDashboard() missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestRenderDashboardUsesUniformPanelWidth(t *testing.T) {
+	t.Parallel()
+
+	out := ui.RenderDashboard(
+		time.Date(2026, 4, 23, 10, 1, 1, 0, time.UTC),
+		nil,
+		nil,
+		0,
+		5,
+	)
+
+	lines := strings.Split(out, "\n")
+	var widths []int
+	for _, line := range lines {
+		if strings.HasPrefix(line, "┌") || strings.HasPrefix(line, "└") || strings.HasPrefix(line, "│ ┌") || strings.HasPrefix(line, "│ └") {
+			widths = append(widths, utf8.RuneCountInString(line))
+		}
+	}
+
+	if len(widths) != 8 {
+		t.Fatalf("panel border count = %d, want 8 in %q", len(widths), out)
+	}
+	for i := 1; i < len(widths); i++ {
+		if widths[i] != widths[0] {
+			t.Fatalf("panel border widths = %v, want all equal", widths)
 		}
 	}
 }
@@ -334,10 +409,18 @@ func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 		5,
 	)
 
-	want := "│ 动漫-b      83%       29.8 MiB/s    ETA 00:05     COPYING │"
-	if !strings.Contains(out, want) {
-		t.Fatalf("RenderDashboard() missing %q in %q", want, out)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "动漫-b") {
+			got := strings.TrimRight(stripNestedFrameLine(line), " ")
+			want := "动漫-b      83%       29.8 MiB/s    ETA 00:05     COPYING"
+			if got != want {
+				t.Fatalf("wide-character row = %q, want %q", got, want)
+			}
+			return
+		}
 	}
+
+	t.Fatalf("RenderDashboard() missing wide-character job row in %q", out)
 }
 
 func TestRenderDashboardFormatsHourETAInStructuredJobs(t *testing.T) {
@@ -379,11 +462,11 @@ func TestRenderDashboardKeepsActiveJobColumnsAlignedForRuntimeValues(t *testing.
 	var rows []string
 	for _, line := range lines {
 		if strings.Contains(line, "NAME") && strings.Contains(line, "PROGRESS") && strings.Contains(line, "STATUS") {
-			header = strings.TrimSpace(strings.Trim(line, "│"))
+			header = stripNestedFrameLine(line)
 			continue
 		}
 		if strings.Contains(line, "job-a") || strings.Contains(line, "job-b") {
-			rows = append(rows, strings.TrimSpace(strings.Trim(line, "│")))
+			rows = append(rows, stripNestedFrameLine(line))
 		}
 	}
 
@@ -407,6 +490,15 @@ func TestRenderDashboardKeepsActiveJobColumnsAlignedForRuntimeValues(t *testing.
 			}
 		}
 	}
+}
+
+func stripNestedFrameLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimPrefix(trimmed, "│ ")
+	trimmed = strings.TrimSuffix(trimmed, " │")
+	trimmed = strings.TrimPrefix(trimmed, "│ ")
+	trimmed = strings.TrimSuffix(trimmed, " │")
+	return trimmed
 }
 
 func TestRenderDashboardShowsMonthDayTimeForOlderEvents(t *testing.T) {

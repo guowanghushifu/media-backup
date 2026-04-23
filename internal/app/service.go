@@ -37,6 +37,7 @@ type Service struct {
 	startUpload    func(context.Context, *jobRuntime)
 	afterMarkDirty func(string)
 	now            func() time.Time
+	uiWidth        func() int
 
 	mu           sync.Mutex
 	jobs         map[string]*jobRuntime
@@ -83,6 +84,9 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	}
 	s.addWatches = s.addRecursiveWatches
 	s.copyJob = s.copyWithRclone
+	s.uiWidth = func() int {
+		return ui.DetectWidth(s.uiWriter)
+	}
 	s.startUpload = func(ctx context.Context, job *jobRuntime) {
 		go s.runUpload(ctx, job)
 	}
@@ -431,7 +435,11 @@ func (s *Service) currentTime() time.Time {
 
 func (s *Service) renderDashboard(now time.Time) {
 	active, events, waiting := s.snapshotUI()
-	content := ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)
+	width := ui.DetectWidth(s.uiWriter)
+	if s.uiWidth != nil {
+		width = s.uiWidth()
+	}
+	content := ui.RenderDashboardWithWidth(now, active, events, waiting, s.cfg.MaxParallelUploads, width)
 	s.writeUI(ui.RewriteFrame(content))
 }
 

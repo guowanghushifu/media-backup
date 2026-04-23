@@ -165,6 +165,7 @@ func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
 	s := newTestService()
 	writer := newRecordingWriter()
 	s.uiWriter = writer
+	s.uiWidth = func() int { return 80 }
 	s.now = func() time.Time { return start }
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -185,8 +186,8 @@ func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
 
 	active, events, waiting := s.snapshotUI()
 	want := ui.EnterAlternateScreen() +
-		ui.RewriteFrame(ui.RenderDashboard(start, active, events, waiting, s.cfg.MaxParallelUploads)) +
-		ui.RewriteFrame(ui.RenderDashboard(now, active, events, waiting, s.cfg.MaxParallelUploads)) +
+		ui.RewriteFrame(ui.RenderDashboardWithWidth(start, active, events, waiting, s.cfg.MaxParallelUploads, 80)) +
+		ui.RewriteFrame(ui.RenderDashboardWithWidth(now, active, events, waiting, s.cfg.MaxParallelUploads, 80)) +
 		ui.LeaveAlternateScreen() +
 		"\n"
 	if got := writer.String(); got != want {
@@ -219,6 +220,7 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 
 	writer := newRecordingWriter()
 	s.uiWriter = writer
+	s.uiWidth = func() int { return 80 }
 	start := time.Date(2026, 4, 22, 17, 4, 10, 0, time.UTC)
 	s.now = func() time.Time { return start }
 
@@ -262,7 +264,7 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 	}
 
 	want := ui.EnterAlternateScreen() +
-		ui.RewriteFrame(ui.RenderDashboard(start, nil, nil, 0, s.cfg.MaxParallelUploads))
+		ui.RewriteFrame(ui.RenderDashboardWithWidth(start, nil, nil, 0, s.cfg.MaxParallelUploads, 80))
 	if got := writer.String(); got != want {
 		t.Fatalf("startup UI output before scan completes = %q, want %q", got, want)
 	}

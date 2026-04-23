@@ -11,6 +11,8 @@ const (
 	activeJobProgressWidth = 8
 	activeJobSpeedWidth    = 12
 	activeJobETAWidth      = 12
+	minBodyRows            = 5
+	minDashboardWidth      = 60
 )
 
 type JobStatus struct {
@@ -24,20 +26,46 @@ type EventRecord struct {
 }
 
 func RenderIdle(now time.Time) string {
-	return RenderDashboard(now, nil, nil, 0, 0)
+	return RenderDashboardWithWidth(now, nil, nil, 0, 0, defaultWidth)
 }
 
 func RenderDashboard(now time.Time, active []JobStatus, events []EventRecord, waiting int, maxParallel int) string {
-	lines := renderSummaryPanel(now, len(active), waiting, maxParallel)
-
-	lines = append(lines, "")
-	lines = append(lines, renderActiveJobsPanel(active)...)
-	lines = append(lines, "")
-	lines = append(lines, renderEventsPanel(now, events)...)
-	return strings.Join(lines, "\n")
+	return RenderDashboardWithWidth(now, active, events, waiting, maxParallel, defaultWidth)
 }
 
-func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel int) []string {
+func RenderDashboardWithWidth(now time.Time, active []JobStatus, events []EventRecord, waiting int, maxParallel int, width int) string {
+	summaryTitle, summaryBody := renderSummaryPanel(now, len(active), waiting, maxParallel)
+	jobsTitle, jobsBody := renderActiveJobsPanel(active)
+	eventsTitle, eventsBody := renderEventsPanel(now, events)
+
+	totalWidth := width
+	if totalWidth < minDashboardWidth {
+		totalWidth = minDashboardWidth
+	}
+
+	innerPanelWidth := totalWidth - 4
+	minInnerPanelWidth := panelTotalWidth(summaryTitle, summaryBody)
+	if panelWidth := panelTotalWidth(jobsTitle, jobsBody); panelWidth > minInnerPanelWidth {
+		minInnerPanelWidth = panelWidth
+	}
+	if panelWidth := panelTotalWidth(eventsTitle, eventsBody); panelWidth > minInnerPanelWidth {
+		minInnerPanelWidth = panelWidth
+	}
+	if innerPanelWidth < minInnerPanelWidth {
+		innerPanelWidth = minInnerPanelWidth
+		totalWidth = innerPanelWidth + 4
+	}
+
+	lines := renderPanel(summaryTitle, summaryBody, innerPanelWidth, 1)
+	lines = append(lines, "")
+	lines = append(lines, renderPanel(jobsTitle, jobsBody, innerPanelWidth, minBodyRows)...)
+	lines = append(lines, "")
+	lines = append(lines, renderPanel(eventsTitle, eventsBody, innerPanelWidth, minBodyRows)...)
+
+	return strings.Join(outerFrame(lines, totalWidth), "\n")
+}
+
+func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel int) (string, []string) {
 	state := "IDLE"
 	if activeCount > 0 {
 		state = "RUNNING"
@@ -45,7 +73,7 @@ func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel
 		state = "QUEUED"
 	}
 
-	return panel("SYSTEM STATUS", []string{
+	return "SYSTEM STATUS", []string{
 		fmt.Sprintf("%s  ACTIVE %d/%d  QUEUE %d  UPDATED %s",
 			"STATE "+state,
 			activeCount,
@@ -53,12 +81,12 @@ func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel
 			waiting,
 			now.Format("15:04:05"),
 		),
-	})
+	}
 }
 
-func renderActiveJobsPanel(active []JobStatus) []string {
+func renderActiveJobsPanel(active []JobStatus) (string, []string) {
 	if len(active) == 0 {
-		return panel("ACTIVE JOBS", []string{"No active transfers"})
+		return "ACTIVE JOBS", []string{"No active transfers"}
 	}
 
 	rows := []string{formatActiveJobRow("NAME", "PROGRESS", "SPEED", "ETA", "STATUS")}
@@ -66,7 +94,7 @@ func renderActiveJobsPanel(active []JobStatus) []string {
 		progress, speed, eta, state := parseJobSummary(job.Summary)
 		rows = append(rows, formatActiveJobRow(job.Name, progress, speed, eta, state))
 	}
-	return panel("ACTIVE JOBS", rows)
+	return "ACTIVE JOBS", rows
 }
 
 func formatActiveJobRow(name string, progress string, speed string, eta string, state string) string {
@@ -122,9 +150,9 @@ func formatETA(raw string) string {
 	return fmt.Sprintf("ETA %02d:%02d", minutes, seconds)
 }
 
-func renderEventsPanel(now time.Time, events []EventRecord) []string {
+func renderEventsPanel(now time.Time, events []EventRecord) (string, []string) {
 	if len(events) == 0 {
-		return panel("RECENT EVENTS (0)", []string{"Watching for new files..."})
+		return "RECENT EVENTS (0)", []string{"Watching for new files..."}
 	}
 
 	rows := make([]string, 0, len(events))
@@ -132,7 +160,7 @@ func renderEventsPanel(now time.Time, events []EventRecord) []string {
 		tag, message := classifyEvent(event.Message)
 		rows = append(rows, fmt.Sprintf("%s  %-6s  %s", formatEventTime(now, event.At), tag, message))
 	}
-	return panel(fmt.Sprintf("RECENT EVENTS (%d)", len(events)), rows)
+	return fmt.Sprintf("RECENT EVENTS (%d)", len(events)), rows
 }
 
 func classifyEvent(message string) (string, string) {

@@ -19,21 +19,103 @@ func colorize(code string, text string) string {
 }
 
 func panel(title string, body []string) []string {
-	width := displayWidth(title)
-	for _, line := range body {
-		if lineWidth := displayWidth(line); lineWidth > width {
-			width = lineWidth
-		}
+	return renderPanel(title, body, panelTotalWidth(title, body), 0)
+}
+
+func renderPanel(title string, body []string, totalWidth int, minBodyRows int) []string {
+	if minWidth := panelTotalWidth(title, body); totalWidth < minWidth {
+		totalWidth = minWidth
+	}
+
+	bodyWidth := totalWidth - 4
+	linesBody := append([]string{}, body...)
+	for len(linesBody) < minBodyRows {
+		linesBody = append(linesBody, "")
+	}
+
+	titleWidth := displayWidth(title)
+	topFill := totalWidth - titleWidth - 5
+	if topFill < 0 {
+		topFill = 0
 	}
 
 	lines := []string{
-		"┌─ " + title + " " + strings.Repeat("─", width-displayWidth(title)) + "─┐",
+		"┌─ " + title + " " + strings.Repeat("─", topFill) + "┐",
 	}
-	for _, line := range body {
-		lines = append(lines, "│ "+line+strings.Repeat(" ", width-displayWidth(line))+" │")
+	for _, line := range linesBody {
+		lines = append(lines, "│ "+padOrTrimDisplay(line, bodyWidth)+" │")
 	}
-	lines = append(lines, "└"+strings.Repeat("─", width+3)+"┘")
+	lines = append(lines, "└"+strings.Repeat("─", totalWidth-2)+"┘")
 	return lines
+}
+
+func panelTotalWidth(title string, body []string) int {
+	width := displayWidth(title) + 5
+	for _, line := range body {
+		if lineWidth := displayWidth(line) + 4; lineWidth > width {
+			width = lineWidth
+		}
+	}
+	return width
+}
+
+func outerFrame(lines []string, totalWidth int) []string {
+	if totalWidth < 6 {
+		totalWidth = 6
+	}
+	innerWidth := totalWidth - 4
+	framed := []string{"┌" + strings.Repeat("─", totalWidth-2) + "┐"}
+	blank := "│ " + strings.Repeat(" ", innerWidth) + " │"
+
+	for _, line := range lines {
+		if line == "" {
+			framed = append(framed, blank)
+			continue
+		}
+		framed = append(framed, "│ "+padOrTrimDisplay(line, innerWidth)+" │")
+	}
+
+	framed = append(framed, "└"+strings.Repeat("─", totalWidth-2)+"┘")
+	return framed
+}
+
+func padOrTrimDisplay(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if displayWidth(text) > width {
+		return trimDisplay(text, width)
+	}
+	return text + strings.Repeat(" ", width-displayWidth(text))
+}
+
+func trimDisplay(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if displayWidth(text) <= width {
+		return text
+	}
+	if width <= 3 {
+		return strings.Repeat(".", width)
+	}
+
+	target := width - 3
+	current := 0
+	var b strings.Builder
+	for _, r := range text {
+		rw := 1
+		if isWideRune(r) {
+			rw = 2
+		}
+		if current+rw > target {
+			break
+		}
+		b.WriteRune(r)
+		current += rw
+	}
+	b.WriteString("...")
+	return b.String()
 }
 
 func displayWidth(text string) int {
