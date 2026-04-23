@@ -751,6 +751,63 @@ func TestRenderDashboardTruncatesDecomposedUnicodeNamesWithoutShiftingColumns(t 
 	}
 }
 
+func TestRenderDashboardTruncatesAllCJKNamesAtFortyColumnsWithoutShiftingColumns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	longCJKName := strings.Repeat("影", 21)
+	out := ui.RenderDashboardWithWidth(
+		now,
+		[]ui.JobStatus{
+			{Name: longCJKName, Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+			{Name: "plain-ascii.mkv", Summary: "12.4 GiB / 40.0 GiB, 31%, 112.342 MiB/s, ETA 1h2m3s"},
+		},
+		nil,
+		0,
+		5,
+		120,
+	)
+
+	lines := strings.Split(out, "\n")
+	var header string
+	var cjkRow string
+	var asciiRow string
+	for _, line := range lines {
+		if strings.Contains(line, "名称") && strings.Contains(line, "进度") && strings.Contains(line, "状态") {
+			header = stripNestedFrameLine(line)
+			continue
+		}
+		if strings.Contains(line, "83%") {
+			cjkRow = stripNestedFrameLine(line)
+		}
+		if strings.Contains(line, "31%") {
+			asciiRow = stripNestedFrameLine(line)
+		}
+	}
+
+	if header == "" || cjkRow == "" || asciiRow == "" {
+		t.Fatalf("RenderDashboard() did not render expected active job rows in %q", out)
+	}
+
+	wantName := trimDisplayToWidth(longCJKName, 40)
+	if !strings.Contains(cjkRow, wantName) {
+		t.Fatalf("all-CJK row = %q, want truncated name %q", cjkRow, wantName)
+	}
+
+	headerStarts := columnStarts(header)
+	for _, row := range []string{cjkRow, asciiRow} {
+		rowStarts := columnStarts(row)
+		if len(rowStarts) != len(headerStarts) {
+			t.Fatalf("active job row columns = %v, want %v in %q", rowStarts, headerStarts, row)
+		}
+		for i := range headerStarts {
+			if rowStarts[i] != headerStarts[i] {
+				t.Fatalf("active job row column %d starts at %d, want %d; row=%q header=%q", i, rowStarts[i], headerStarts[i], row, header)
+			}
+		}
+	}
+}
+
 func stripNestedFrameLine(line string) string {
 	trimmed := strings.TrimSpace(line)
 	trimmed = strings.TrimPrefix(trimmed, "│ ")

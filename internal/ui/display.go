@@ -9,10 +9,12 @@ func fitDisplayColumns(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if displayColumns(text) > width {
-		return truncateDisplayColumns(text, width)
+	textWidth := displayColumns(text)
+	if textWidth > width {
+		text = truncateDisplayColumns(text, width)
+		textWidth = displayColumns(text)
 	}
-	return text + strings.Repeat(" ", width-displayColumns(text))
+	return text + strings.Repeat(" ", width-textWidth)
 }
 
 func truncateDisplayColumns(text string, width int) string {

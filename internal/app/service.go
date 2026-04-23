@@ -77,6 +77,7 @@ type jobRuntime struct {
 	cfg        config.JobConfig
 	key        string
 	sourcePath string
+	sourceInfo os.FileInfo
 	linkPath   string
 	remoteDir  string
 	summary    string
@@ -319,6 +320,7 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 	if err != nil {
 		return nil, false, false, err
 	}
+	sourceInfo, _ := os.Stat(sourcePath)
 	ready := s.isJobReady(linkPath)
 	pendingRetry := s.isRetryWaiting(linkPath)
 
@@ -327,7 +329,7 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 		s.jobs = map[string]*jobRuntime{}
 	}
 	task := s.jobs[linkPath]
-	clearRetryWait := pendingRetry && (task == nil || task.sourcePath != sourcePath)
+	clearRetryWait := pendingRetry && (task == nil || task.sourcePath != sourcePath || sourceIdentityChanged(task.sourceInfo, sourceInfo))
 	if task == nil || task.active || (!ready && !pendingRetry) || clearRetryWait {
 		task = &jobRuntime{}
 		s.jobs[linkPath] = task
@@ -335,6 +337,7 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 	task.cfg = cfgJob
 	task.key = linkPath
 	task.sourcePath = sourcePath
+	task.sourceInfo = sourceInfo
 	task.linkPath = linkPath
 	task.remoteDir = remoteDir
 	if clearRetryWait {
@@ -346,6 +349,10 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 		s.scheduler.RetryJob(linkPath)
 	}
 	return task, ready, pendingRetry, nil
+}
+
+func sourceIdentityChanged(previous os.FileInfo, current os.FileInfo) bool {
+	return previous != nil && current != nil && !os.SameFile(previous, current)
 }
 
 func (s *Service) registerTaskByLinkPath(cfgJob config.JobConfig, linkPath string) (*jobRuntime, error) {
