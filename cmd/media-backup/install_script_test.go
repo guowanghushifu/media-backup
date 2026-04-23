@@ -73,6 +73,8 @@ func TestInstallScriptDefaultInstallsServiceFromSiblingBinary(t *testing.T) {
 		"ExecStart=" + filepath.Join(realTempDir, "media-backup-linux-amd64"),
 		"Restart=on-failure",
 		"RestartSec=30",
+		"StandardOutput=null",
+		"StandardError=journal",
 	} {
 		if !strings.Contains(string(unitContent), want) {
 			t.Fatalf("unit file missing %q in %q", want, string(unitContent))

@@ -81,6 +81,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${working_dir}
 ExecStart=${binary_path}
+StandardOutput=null
+StandardError=journal
 Restart=on-failure
 RestartSec=30
 
