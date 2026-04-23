@@ -4,15 +4,17 @@ set -euo pipefail
 service_name="media-backup.service"
 unit_dir="${MEDIA_BACKUP_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 systemctl_bin="${MEDIA_BACKUP_SYSTEMCTL_BIN:-systemctl}"
+sleep_bin="${MEDIA_BACKUP_SLEEP_BIN:-sleep}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 unit_path="${unit_dir}/${service_name}"
 
 usage() {
   cat <<'EOF'
-Usage: install-systemd-service.sh [-i|-u]
+Usage: install-systemd-service.sh [-i|-u|-r]
 
   -i    install the systemd service
   -u    uninstall the systemd service
+  -r    stop the service, wait 30s, then start it again
 
 No argument defaults to install.
 EOF
@@ -121,6 +123,21 @@ uninstall_service() {
   echo "uninstalled ${service_name}"
 }
 
+restart_service() {
+  require_root
+
+  if [[ ! -f "${unit_path}" ]]; then
+    echo "${service_name} is not installed" >&2
+    exit 1
+  fi
+
+  "${systemctl_bin}" stop "${service_name}"
+  "${sleep_bin}" 30
+  "${systemctl_bin}" start "${service_name}"
+
+  echo "restarted ${service_name} after 30s delay"
+}
+
 action="${1:-}"
 case "${action}" in
   "")
@@ -131,6 +148,9 @@ case "${action}" in
     ;;
   -u)
     uninstall_service
+    ;;
+  -r)
+    restart_service
     ;;
   -h|--help)
     usage

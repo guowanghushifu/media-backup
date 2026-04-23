@@ -22,7 +22,7 @@ import (
 )
 
 const maxRecentEvents = 10
-const uiKeepaliveInterval = 5 * time.Second
+const uiKeepaliveInterval = 3 * time.Second
 
 type Service struct {
 	cfg            *config.Config

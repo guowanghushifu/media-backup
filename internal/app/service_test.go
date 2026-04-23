@@ -161,7 +161,7 @@ func TestRunUILoopSkipsUnchangedRefreshUntilKeepalive(t *testing.T) {
 	t.Parallel()
 
 	start := time.Date(2026, 4, 22, 17, 4, 9, 0, time.UTC)
-	keepalive := time.Date(2026, 4, 22, 17, 4, 14, 0, time.UTC)
+	keepalive := time.Date(2026, 4, 22, 17, 4, 12, 0, time.UTC)
 	s := newTestService()
 	writer := newRecordingWriter()
 	s.uiWriter = writer
