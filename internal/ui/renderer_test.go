@@ -68,9 +68,9 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
-		"│ │ NAME        PROGRESS  SPEED         ETA           STATUS                 │ │",
-		"│ │ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING                │ │",
-		"│ │ job-b       31%       48.2 MiB/s    ETA 09:12     COPYING                │ │",
+		"│ │ NAME              PROGRESS  SPEED             ETA           STATUS       │ │",
+		"│ │ job-a             83%       29.793 MiB/s      ETA 00:05     COPYING      │ │",
+		"│ │ job-b             31%       48.2 MiB/s        ETA 09:12     COPYING      │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
@@ -197,8 +197,8 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ ACTIVE JOBS ────────────────────────────────────────────────────────────┐ │",
-		"│ │ NAME        PROGRESS  SPEED         ETA           STATUS                 │ │",
-		"│ │ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING                │ │",
+		"│ │ NAME              PROGRESS  SPEED             ETA           STATUS       │ │",
+		"│ │ job-a             83%       29.793 MiB/s      ETA 00:05     COPYING      │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -412,7 +412,7 @@ func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "动漫-b") {
 			got := strings.TrimRight(stripNestedFrameLine(line), " ")
-			want := "动漫-b      83%       29.8 MiB/s    ETA 00:05     COPYING"
+			want := "动漫-b            83%       29.8 MiB/s        ETA 00:05     COPYING"
 			if got != want {
 				t.Fatalf("wide-character row = %q, want %q", got, want)
 			}
@@ -450,7 +450,7 @@ func TestRenderDashboardKeepsActiveJobColumnsAlignedForRuntimeValues(t *testing.
 		now,
 		[]ui.JobStatus{
 			{Name: "job-a", Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
-			{Name: "job-b", Summary: "12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 1h2m3s"},
+			{Name: "job-b", Summary: "12.4 GiB / 40.0 GiB, 31%, 112.342 MiB/s, ETA 1h2m3s"},
 		},
 		nil,
 		0,
@@ -479,6 +479,59 @@ func TestRenderDashboardKeepsActiveJobColumnsAlignedForRuntimeValues(t *testing.
 		t.Fatalf("active job header columns = %v, want 5 columns in %q", headerStarts, header)
 	}
 
+	for _, row := range rows {
+		rowStarts := columnStarts(row)
+		if len(rowStarts) != len(headerStarts) {
+			t.Fatalf("active job row columns = %v, want %v in %q", rowStarts, headerStarts, row)
+		}
+		for i := range headerStarts {
+			if rowStarts[i] != headerStarts[i] {
+				t.Fatalf("active job row column %d starts at %d, want %d; row=%q header=%q", i, rowStarts[i], headerStarts[i], row, header)
+			}
+		}
+	}
+}
+
+func TestRenderDashboardTruncatesLongJobNamesWithoutShiftingColumns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		[]ui.JobStatus{
+			{Name: "VERY-LONG-TV-SHOW", Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+			{Name: "job-b", Summary: "12.4 GiB / 40.0 GiB, 31%, 112.342 MiB/s, ETA 1h2m3s"},
+		},
+		nil,
+		0,
+		5,
+	)
+
+	lines := strings.Split(out, "\n")
+	var header string
+	var rows []string
+	for _, line := range lines {
+		if strings.Contains(line, "NAME") && strings.Contains(line, "PROGRESS") && strings.Contains(line, "STATUS") {
+			header = stripNestedFrameLine(line)
+			continue
+		}
+		if strings.Contains(line, "VERY-LONG-TV") || strings.Contains(line, "job-b") {
+			rows = append(rows, stripNestedFrameLine(line))
+		}
+	}
+
+	if header == "" || len(rows) != 2 {
+		t.Fatalf("RenderDashboard() did not render expected rows in %q", out)
+	}
+
+	if !strings.Contains(rows[0], "VERY-LONG-TV-...") {
+		t.Fatalf("long-name row = %q, want truncated name", rows[0])
+	}
+	if strings.Contains(rows[0], "VERY-LONG-TV-SHOW") {
+		t.Fatalf("long-name row = %q, want original name to be truncated", rows[0])
+	}
+
+	headerStarts := columnStarts(header)
 	for _, row := range rows {
 		rowStarts := columnStarts(row)
 		if len(rowStarts) != len(headerStarts) {

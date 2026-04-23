@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	activeJobNameWidth     = 10
+	activeJobNameWidth     = 16
 	activeJobProgressWidth = 8
-	activeJobSpeedWidth    = 12
+	activeJobSpeedWidth    = 16
 	activeJobETAWidth      = 12
 	minBodyRows            = 5
 	minDashboardWidth      = 9
@@ -101,11 +101,7 @@ func formatActiveJobRow(name string, progress string, speed string, eta string, 
 }
 
 func padDisplayCell(text string, width int) string {
-	padding := width - displayWidth(text)
-	if padding < 0 {
-		padding = 0
-	}
-	return text + strings.Repeat(" ", padding)
+	return padOrTrimDisplay(text, width)
 }
 
 func parseJobSummary(summary string) (progress string, speed string, eta string, state string) {
