@@ -72,6 +72,27 @@ jobs:
 	}
 }
 
+func TestLoadConfigRejectsNegativeMaxRetryCount(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+max_retry_count: -1
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want max_retry_count validation error")
+	}
+	if !strings.Contains(err.Error(), "max_retry_count must be greater than or equal to 0") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "max_retry_count must be greater than or equal to 0")
+	}
+}
+
 func TestLoadConfigAcceptsDisabledTelegramWithoutCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -118,6 +139,30 @@ jobs:
 	}
 }
 
+func TestLoadConfigRejectsEnabledTelegramWhitespaceOnlyBotToken(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+telegram:
+  enabled: true
+  bot_token: "   "
+  chat_id: -1001234567890
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want telegram bot token validation error")
+	}
+	if !strings.Contains(err.Error(), "telegram bot_token is required") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "telegram bot_token is required")
+	}
+}
+
 func TestLoadConfigRejectsEnabledTelegramMissingChatID(t *testing.T) {
 	t.Parallel()
 
@@ -125,6 +170,30 @@ func TestLoadConfigRejectsEnabledTelegramMissingChatID(t *testing.T) {
 telegram:
   enabled: true
   bot_token: 123456:ABCDEF
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want telegram chat id validation error")
+	}
+	if !strings.Contains(err.Error(), "telegram chat_id is required") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "telegram chat_id is required")
+	}
+}
+
+func TestLoadConfigRejectsEnabledTelegramWhitespaceOnlyChatID(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+telegram:
+  enabled: true
+  bot_token: 123456:ABCDEF
+  chat_id: "   "
 jobs:
   - name: movies
     source_dir: /media/movies
