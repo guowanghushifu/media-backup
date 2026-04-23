@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+const (
+	activeJobNameWidth     = 10
+	activeJobProgressWidth = 8
+	activeJobSpeedWidth    = 12
+	activeJobETAWidth      = 12
+)
+
 type JobStatus struct {
 	Name    string
 	Summary string
@@ -54,7 +61,7 @@ func renderActiveJobsPanel(active []JobStatus) []string {
 		return panel("ACTIVE JOBS", []string{"No active transfers"})
 	}
 
-	rows := []string{"NAME        PROGRESS  SPEED       ETA       STATUS"}
+	rows := []string{formatActiveJobRow("NAME", "PROGRESS", "SPEED", "ETA", "STATUS")}
 	for _, job := range active {
 		progress, speed, eta, state := parseJobSummary(job.Summary)
 		rows = append(rows, formatActiveJobRow(job.Name, progress, speed, eta, state))
@@ -64,10 +71,10 @@ func renderActiveJobsPanel(active []JobStatus) []string {
 
 func formatActiveJobRow(name string, progress string, speed string, eta string, state string) string {
 	return strings.Join([]string{
-		padDisplayCell(name, 10),
-		padDisplayCell(progress, 8),
-		padDisplayCell(speed, 10),
-		padDisplayCell(eta, 8),
+		padDisplayCell(name, activeJobNameWidth),
+		padDisplayCell(progress, activeJobProgressWidth),
+		padDisplayCell(speed, activeJobSpeedWidth),
+		padDisplayCell(eta, activeJobETAWidth),
 		state,
 	}, "  ")
 }
@@ -136,10 +143,10 @@ func classifyEvent(message string) (string, string) {
 		return "SCAN", message
 	case strings.Contains(message, "上传失败"):
 		return "FAIL", message
-	case strings.Contains(message, "调度开始上传"), strings.Contains(message, "重新排队"), strings.Contains(message, "重试"):
-		return "QUEUE", message
 	case strings.Contains(message, "上传完成"):
 		return "DONE", message
+	case strings.Contains(message, "调度开始上传"), strings.Contains(message, "重新排队"), strings.Contains(message, "重试"):
+		return "QUEUE", message
 	default:
 		return "INFO", message
 	}

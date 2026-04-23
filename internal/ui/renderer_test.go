@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/guowanghushifu/media-backup/internal/ui"
 )
@@ -55,11 +56,11 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ STATE RUNNING  ACTIVE 2/5  QUEUE 1  UPDATED 15:04:05 │",
 		"└───────────────────────────────────────────────────────┘",
 		"",
-		"┌─ ACTIVE JOBS ────────────────────────────────────────────┐",
-		"│ NAME        PROGRESS  SPEED       ETA       STATUS     │",
-		"│ job-a       83%       29.793 MiB/s  ETA 00:05  COPYING │",
-		"│ job-b       31%       48.2 MiB/s  ETA 09:12  COPYING   │",
-		"└─────────────────────────────────────────────────────────┘",
+		"┌─ ACTIVE JOBS ───────────────────────────────────────────────┐",
+		"│ NAME        PROGRESS  SPEED         ETA           STATUS  │",
+		"│ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING │",
+		"│ job-b       31%       48.2 MiB/s    ETA 09:12     COPYING │",
+		"└────────────────────────────────────────────────────────────┘",
 		"",
 		"┌─ RECENT EVENTS (2) ────────────────────────────────────────┐",
 		"│ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new) │",
@@ -157,10 +158,10 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		"│ STATE RUNNING  ACTIVE 1/5  QUEUE 0  UPDATED 15:04:05 │",
 		"└───────────────────────────────────────────────────────┘",
 		"",
-		"┌─ ACTIVE JOBS ────────────────────────────────────────────┐",
-		"│ NAME        PROGRESS  SPEED       ETA       STATUS     │",
-		"│ job-a       83%       29.793 MiB/s  ETA 00:05  COPYING │",
-		"└─────────────────────────────────────────────────────────┘",
+		"┌─ ACTIVE JOBS ───────────────────────────────────────────────┐",
+		"│ NAME        PROGRESS  SPEED         ETA           STATUS  │",
+		"│ job-a       83%       29.793 MiB/s  ETA 00:05     COPYING │",
+		"└────────────────────────────────────────────────────────────┘",
 		"",
 		"┌─ RECENT EVENTS (0) ─────────┐",
 		"│ Watching for new files... │",
@@ -275,6 +276,28 @@ func TestRenderDashboardTagsFailureEventsBeforeRetryQueue(t *testing.T) {
 	}
 }
 
+func TestRenderDashboardTagsSuccessfulRequeueEventsAsDone(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		nil,
+		[]ui.EventRecord{
+			{At: time.Date(2026, 4, 23, 9, 29, 59, 0, time.UTC), Message: "[JOB] 上传完成，检测到新增文件，重新排队"},
+		},
+		0,
+		5,
+	)
+
+	if !strings.Contains(out, "09:29:59  DONE") {
+		t.Fatalf("RenderDashboard() missing DONE tag for successful requeue event in %q", out)
+	}
+	if strings.Contains(out, "09:29:59  QUEUE") {
+		t.Fatalf("RenderDashboard() mis-tagged successful requeue event as QUEUE in %q", out)
+	}
+}
+
 func TestRenderDashboardPreservesProvidedEventOrder(t *testing.T) {
 	t.Parallel()
 
@@ -311,7 +334,7 @@ func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 		5,
 	)
 
-	want := "│ 动漫-b      83%       29.8 MiB/s  ETA 00:05  COPYING │"
+	want := "│ 动漫-b      83%       29.8 MiB/s    ETA 00:05     COPYING │"
 	if !strings.Contains(out, want) {
 		t.Fatalf("RenderDashboard() missing %q in %q", want, out)
 	}
@@ -336,6 +359,56 @@ func TestRenderDashboardFormatsHourETAInStructuredJobs(t *testing.T) {
 	}
 }
 
+func TestRenderDashboardKeepsActiveJobColumnsAlignedForRuntimeValues(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		[]ui.JobStatus{
+			{Name: "job-a", Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+			{Name: "job-b", Summary: "12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 1h2m3s"},
+		},
+		nil,
+		0,
+		5,
+	)
+
+	lines := strings.Split(out, "\n")
+	var header string
+	var rows []string
+	for _, line := range lines {
+		if strings.Contains(line, "NAME") && strings.Contains(line, "PROGRESS") && strings.Contains(line, "STATUS") {
+			header = strings.TrimSpace(strings.Trim(line, "│"))
+			continue
+		}
+		if strings.Contains(line, "job-a") || strings.Contains(line, "job-b") {
+			rows = append(rows, strings.TrimSpace(strings.Trim(line, "│")))
+		}
+	}
+
+	if header == "" || len(rows) != 2 {
+		t.Fatalf("RenderDashboard() did not render expected active job table in %q", out)
+	}
+
+	headerStarts := columnStarts(header)
+	if len(headerStarts) != 5 {
+		t.Fatalf("active job header columns = %v, want 5 columns in %q", headerStarts, header)
+	}
+
+	for _, row := range rows {
+		rowStarts := columnStarts(row)
+		if len(rowStarts) != len(headerStarts) {
+			t.Fatalf("active job row columns = %v, want %v in %q", rowStarts, headerStarts, row)
+		}
+		for i := range headerStarts {
+			if rowStarts[i] != headerStarts[i] {
+				t.Fatalf("active job row column %d starts at %d, want %d; row=%q header=%q", i, rowStarts[i], headerStarts[i], row, header)
+			}
+		}
+	}
+}
+
 func TestRenderDashboardShowsMonthDayTimeForOlderEvents(t *testing.T) {
 	t.Parallel()
 
@@ -353,4 +426,44 @@ func TestRenderDashboardShowsMonthDayTimeForOlderEvents(t *testing.T) {
 	if !strings.Contains(out, "04-22 23:59  INFO") {
 		t.Fatalf("RenderDashboard() missing non-same-day timestamp fallback in %q", out)
 	}
+}
+
+func columnStarts(line string) []int {
+	starts := []int{0}
+	width := 0
+	spaceRun := 0
+
+	for len(line) > 0 {
+		r, size := utf8.DecodeRuneInString(line)
+		line = line[size:]
+
+		runeWidth := 1
+		if r >= 0x1100 && (r <= 0x115f ||
+			r == 0x2329 ||
+			r == 0x232a ||
+			(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
+			(r >= 0xac00 && r <= 0xd7a3) ||
+			(r >= 0xf900 && r <= 0xfaff) ||
+			(r >= 0xfe10 && r <= 0xfe19) ||
+			(r >= 0xfe30 && r <= 0xfe6f) ||
+			(r >= 0xff00 && r <= 0xff60) ||
+			(r >= 0xffe0 && r <= 0xffe6) ||
+			(r >= 0x1f300 && r <= 0x1f64f) ||
+			(r >= 0x1f900 && r <= 0x1f9ff) ||
+			(r >= 0x20000 && r <= 0x3fffd)) {
+			runeWidth = 2
+		}
+
+		if r == ' ' {
+			spaceRun += runeWidth
+		} else {
+			if spaceRun >= 2 {
+				starts = append(starts, width)
+			}
+			spaceRun = 0
+		}
+		width += runeWidth
+	}
+
+	return starts
 }
