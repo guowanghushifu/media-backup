@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/guowanghushifu/media-backup/internal/app"
 	"github.com/guowanghushifu/media-backup/internal/config"
@@ -18,18 +19,15 @@ func main() {
 	configPath := flag.String("config", "", "path to config file")
 	flag.Parse()
 
-	logPath, err := resolveLogPath(os.Executable)
+	logDir, err := resolveLogDir(os.Executable)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	logFile, err := app.OpenLogFile(logPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer logFile.Close()
+	logWriter := app.NewDailyLogWriter(logDir, time.Now)
+	defer logWriter.Close()
 
-	logger := log.New(logFile, "", log.LstdFlags)
+	logger := log.New(logWriter, "", log.LstdFlags)
 
 	resolvedConfigPath, err := resolveConfigPath(*configPath, os.Executable, os.Stat)
 	if err != nil {
@@ -83,12 +81,12 @@ func resolveConfigPath(flagValue string, executable func() (string, error), stat
 	return "", errors.New("config file not found: specify -config or place config.yaml next to the executable")
 }
 
-func resolveLogPath(executable func() (string, error)) (string, error) {
+func resolveLogDir(executable func() (string, error)) (string, error) {
 	exePath, err := executable()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(exePath), "logs", "media-backup.log"), nil
+	return filepath.Join(filepath.Dir(exePath), "logs"), nil
 }
 
 func logConfigPath(logger *log.Logger, path string) {

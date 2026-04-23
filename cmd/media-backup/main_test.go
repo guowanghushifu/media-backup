@@ -90,29 +90,29 @@ func TestResolveConfigPathReturnsStatError(t *testing.T) {
 	}
 }
 
-func TestResolveLogPathUsesExecutableDirectory(t *testing.T) {
+func TestResolveLogDirUsesExecutableDirectory(t *testing.T) {
 	t.Parallel()
 
-	got, err := resolveLogPath(func() (string, error) {
+	got, err := resolveLogDir(func() (string, error) {
 		return "/opt/media-backup/media-backup", nil
 	})
 	if err != nil {
-		t.Fatalf("resolveLogPath() error = %v", err)
+		t.Fatalf("resolveLogDir() error = %v", err)
 	}
-	if got != "/opt/media-backup/logs/media-backup.log" {
-		t.Fatalf("resolveLogPath() = %q, want %q", got, "/opt/media-backup/logs/media-backup.log")
+	if got != "/opt/media-backup/logs" {
+		t.Fatalf("resolveLogDir() = %q, want %q", got, "/opt/media-backup/logs")
 	}
 }
 
-func TestResolveLogPathReturnsExecutableError(t *testing.T) {
+func TestResolveLogDirReturnsExecutableError(t *testing.T) {
 	t.Parallel()
 
 	wantErr := errors.New("boom")
-	_, err := resolveLogPath(func() (string, error) {
+	_, err := resolveLogDir(func() (string, error) {
 		return "", wantErr
 	})
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("resolveLogPath() error = %v, want %v", err, wantErr)
+		t.Fatalf("resolveLogDir() error = %v, want %v", err, wantErr)
 	}
 }
 
