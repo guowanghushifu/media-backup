@@ -196,27 +196,9 @@ func (s *Service) startupCatchUp() error {
 }
 
 func (s *Service) configJobList() []config.JobConfig {
-	if len(s.configJobs) > 0 {
-		jobs := make([]config.JobConfig, 0, len(s.configJobs))
-		for _, job := range s.configJobs {
-			jobs = append(jobs, job)
-		}
-		return jobs
-	}
-	if len(s.cfg.Jobs) > 0 {
-		return append([]config.JobConfig(nil), s.cfg.Jobs...)
-	}
-	seen := make(map[string]struct{}, len(s.jobs))
-	jobs := make([]config.JobConfig, 0, len(s.jobs))
-	for _, task := range s.jobs {
-		if task == nil {
-			continue
-		}
-		if _, ok := seen[task.cfg.SourceDir]; ok {
-			continue
-		}
-		seen[task.cfg.SourceDir] = struct{}{}
-		jobs = append(jobs, task.cfg)
+	jobs := make([]config.JobConfig, 0, len(s.configJobs))
+	for _, job := range s.configJobs {
+		jobs = append(jobs, job)
 	}
 	return jobs
 }

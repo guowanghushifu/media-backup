@@ -57,17 +57,23 @@ func TestSnapshotUISortsActiveJobsByName(t *testing.T) {
 	t.Parallel()
 
 	s := newTestService()
-	s.jobs["/movie"] = &jobRuntime{
-		cfg:     config.JobConfig{Name: "MOVIE"},
-		key:     "/movie",
-		summary: "movie summary",
-		active:  true,
+	s.jobs["/links/movie/feature.mkv"] = &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE"},
+		key:        "/links/movie/feature.mkv",
+		sourcePath: "/source/movie/feature.mkv",
+		linkPath:   "/links/movie/feature.mkv",
+		remoteDir:  "remote:movie/",
+		summary:    "movie summary",
+		active:     true,
 	}
-	s.jobs["/remux"] = &jobRuntime{
-		cfg:     config.JobConfig{Name: "4K-REMUX"},
-		key:     "/remux",
-		summary: "remux summary",
-		active:  true,
+	s.jobs["/links/remux/feature.mkv"] = &jobRuntime{
+		cfg:        config.JobConfig{Name: "4K-REMUX"},
+		key:        "/links/remux/feature.mkv",
+		sourcePath: "/source/remux/feature.mkv",
+		linkPath:   "/links/remux/feature.mkv",
+		remoteDir:  "remote:remux/",
+		summary:    "remux summary",
+		active:     true,
 	}
 
 	for i := 0; i < 50; i++ {
@@ -78,6 +84,28 @@ func TestSnapshotUISortsActiveJobsByName(t *testing.T) {
 		if active[0].Name != "4K-REMUX" || active[1].Name != "MOVIE" {
 			t.Fatalf("active order = [%s %s], want [4K-REMUX MOVIE]", active[0].Name, active[1].Name)
 		}
+	}
+}
+
+func TestConfigJobListDoesNotDeriveConfigFromRuntimeTasks(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.jobs["/links/movie/feature.mkv"] = &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    "/source/movie",
+			LinkDir:      "/links/movie",
+			RcloneRemote: "remote:movie",
+		},
+		key:        "/links/movie/feature.mkv",
+		sourcePath: "/source/movie/feature.mkv",
+		linkPath:   "/links/movie/feature.mkv",
+		remoteDir:  "remote:movie/",
+	}
+
+	if jobs := s.configJobList(); len(jobs) != 0 {
+		t.Fatalf("configJobList() = %v, want no config jobs when configJobs is empty", jobs)
 	}
 }
 
