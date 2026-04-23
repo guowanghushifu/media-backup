@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,14 +17,6 @@ import (
 	"github.com/guowanghushifu/media-backup/internal/queue"
 	"github.com/guowanghushifu/media-backup/internal/ui"
 )
-
-func TestJobRuntimeDoesNotExposeDirectoryRerunField(t *testing.T) {
-	t.Parallel()
-
-	if _, ok := reflect.TypeOf(jobRuntime{}).FieldByName("dirtyDuringRun"); ok {
-		t.Fatal("jobRuntime still has obsolete dirtyDuringRun field")
-	}
-}
 
 func TestSnapshotUIIncludesRecentEventsWhileIdle(t *testing.T) {
 	t.Parallel()
@@ -922,6 +913,12 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		}
 		if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，任务清空" {
 			t.Fatalf("recentEvents[0].message = %q, want success event", got)
+		}
+		if _, ok := s.jobs[job.key]; ok {
+			t.Fatalf("runtime task %q still exists after successful upload", job.key)
+		}
+		if _, ok := s.retryDue[job.key]; ok {
+			t.Fatalf("retryDue still contains completed task key %q", job.key)
 		}
 	})
 

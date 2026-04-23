@@ -33,7 +33,6 @@ type Service struct {
 	mkdirAll        func(string, os.FileMode) error
 	addWatches      func(string) error
 	scanExisting    func(string, string, []string, time.Duration) (int, error)
-	scanLinkDir     func(string, []string) (int, error)
 	scanLinkedFiles func(string, []string) ([]string, error)
 	copyJob         func(context.Context, *jobRuntime) error
 	cleanupLinkDir  func(string) error
@@ -90,7 +89,6 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		uiWriter:        os.Stdout,
 		mkdirAll:        os.MkdirAll,
 		scanExisting:    watcher.ScanExistingAndLink,
-		scanLinkDir:     countUploadableFiles,
 		scanLinkedFiles: watcher.ScanLinkedFiles,
 		cleanupLinkDir:  watcher.CleanupLinkDir,
 		now:             time.Now,
@@ -341,6 +339,42 @@ func (s *Service) registerTaskByLinkPath(cfgJob config.JobConfig, linkPath strin
 	return s.registerTask(cfgJob, sourcePath, linkPath)
 }
 
+func (s *Service) taskForKey(key string) *jobRuntime {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.jobs[key]
+}
+
+func (s *Service) activateTaskForUpload(key string) *jobRuntime {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job := s.jobs[key]
+	if job == nil {
+		return nil
+	}
+	job.active = true
+	job.summary = "等待 rclone 输出"
+	return job
+}
+
+func (s *Service) removeTaskIfCompleted(key string) {
+	if s.isJobReady(key) || s.isRetryWaiting(key) {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job := s.jobs[key]
+	if job == nil || job.active {
+		return
+	}
+	delete(s.jobs, key)
+	delete(s.retryDue, key)
+}
+
 func sourcePathFromLinkedPath(sourceDir, linkDir, linkPath string) (string, error) {
 	rel, err := filepath.Rel(filepath.Clean(linkDir), filepath.Clean(linkPath))
 	if err != nil {
@@ -384,7 +418,7 @@ func (s *Service) releaseRetries() {
 
 	for _, key := range due {
 		if s.scheduler.RetryJob(key) {
-			if job := s.jobs[key]; job != nil {
+			if job := s.taskForKey(key); job != nil {
 				s.appendSchedulerEventNow(job, "到达重试时间，重新排队")
 			}
 			s.signalWake()
@@ -397,15 +431,11 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 		if !s.scheduler.TryStart(key) {
 			continue
 		}
-		job := s.jobs[key]
+		job := s.activateTaskForUpload(key)
 		if job == nil {
 			s.scheduler.Finish(key, false)
 			continue
 		}
-		s.mu.Lock()
-		job.active = true
-		job.summary = "等待 rclone 输出"
-		s.mu.Unlock()
 		s.appendSchedulerEventNow(job, "调度开始上传")
 		s.startUpload(ctx, job)
 	}
@@ -444,6 +474,7 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	}
 
 	s.scheduler.Finish(job.key, false)
+	s.removeTaskIfCompleted(job.key)
 	s.appendSchedulerEventNow(job, "上传完成，任务清空")
 	s.signalWake()
 }
@@ -696,21 +727,4 @@ func hasAllowedExtension(path string, extensions []string) bool {
 		}
 	}
 	return false
-}
-
-func countUploadableFiles(root string, extensions []string) (int, error) {
-	var count int
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if hasAllowedExtension(path, extensions) {
-			count++
-		}
-		return nil
-	})
-	return count, err
 }
