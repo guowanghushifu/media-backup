@@ -30,9 +30,10 @@ func truncateDisplayColumns(text string, width int) string {
 	current := 0
 	var b strings.Builder
 	for _, r := range text {
-		rw := 1
-		if isDoubleWidthRune(r) {
-			rw = 2
+		rw := runeDisplayWidth(r)
+		if rw == 0 {
+			b.WriteRune(r)
+			continue
 		}
 		if current+rw > target {
 			break
@@ -47,18 +48,22 @@ func truncateDisplayColumns(text string, width int) string {
 func displayColumns(text string) int {
 	width := 0
 	for _, r := range text {
-		switch {
-		case r == 0:
-			continue
-		case unicode.Is(unicode.Mn, r):
-			continue
-		case isDoubleWidthRune(r):
-			width += 2
-		default:
-			width++
-		}
+		width += runeDisplayWidth(r)
 	}
 	return width
+}
+
+func runeDisplayWidth(r rune) int {
+	switch {
+	case r == 0:
+		return 0
+	case unicode.Is(unicode.Mn, r):
+		return 0
+	case isDoubleWidthRune(r):
+		return 2
+	default:
+		return 1
+	}
 }
 
 func isDoubleWidthRune(r rune) bool {

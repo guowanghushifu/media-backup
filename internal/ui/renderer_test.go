@@ -691,6 +691,66 @@ func TestRenderDashboardTruncatesMixedWidthActiveNamesToFortyColumnsAndKeepsAlig
 	}
 }
 
+func TestRenderDashboardTruncatesDecomposedUnicodeNamesWithoutShiftingColumns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	longDecomposedName := "Cafe\u0301-archive-episode-01-special-edition-directors-cut.mkv"
+	out := ui.RenderDashboardWithWidth(
+		now,
+		[]ui.JobStatus{
+			{Name: longDecomposedName, Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+			{Name: "plain-ascii.mkv", Summary: "12.4 GiB / 40.0 GiB, 31%, 112.342 MiB/s, ETA 1h2m3s"},
+		},
+		nil,
+		0,
+		5,
+		120,
+	)
+
+	lines := strings.Split(out, "\n")
+	var header string
+	var decomposedRow string
+	var asciiRow string
+	for _, line := range lines {
+		if strings.Contains(line, "名称") && strings.Contains(line, "进度") && strings.Contains(line, "状态") {
+			header = stripNestedFrameLine(line)
+			continue
+		}
+		if strings.Contains(line, "83%") {
+			decomposedRow = stripNestedFrameLine(line)
+		}
+		if strings.Contains(line, "31%") {
+			asciiRow = stripNestedFrameLine(line)
+		}
+	}
+
+	if header == "" || decomposedRow == "" || asciiRow == "" {
+		t.Fatalf("RenderDashboard() did not render expected active job rows in %q", out)
+	}
+
+	wantName := trimDisplayToWidth(longDecomposedName, 40)
+	if !strings.Contains(decomposedRow, wantName) {
+		t.Fatalf("decomposed row = %q, want truncated name %q", decomposedRow, wantName)
+	}
+	if got := displayWidth(firstColumn(header, decomposedRow)); got != 40 {
+		t.Fatalf("decomposed name cell width = %d, want 40 in %q", got, decomposedRow)
+	}
+
+	headerStarts := columnStarts(header)
+	for _, row := range []string{decomposedRow, asciiRow} {
+		rowStarts := columnStarts(row)
+		if len(rowStarts) != len(headerStarts) {
+			t.Fatalf("active job row columns = %v, want %v in %q", rowStarts, headerStarts, row)
+		}
+		for i := range headerStarts {
+			if rowStarts[i] != headerStarts[i] {
+				t.Fatalf("active job row column %d starts at %d, want %d; row=%q header=%q", i, rowStarts[i], headerStarts[i], row, header)
+			}
+		}
+	}
+}
+
 func stripNestedFrameLine(line string) string {
 	trimmed := strings.TrimSpace(line)
 	trimmed = strings.TrimPrefix(trimmed, "│ ")
@@ -770,21 +830,9 @@ func columnStarts(line string) []int {
 		r, size := utf8.DecodeRuneInString(line)
 		line = line[size:]
 
-		runeWidth := 1
-		if r >= 0x1100 && (r <= 0x115f ||
-			r == 0x2329 ||
-			r == 0x232a ||
-			(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
-			(r >= 0xac00 && r <= 0xd7a3) ||
-			(r >= 0xf900 && r <= 0xfaff) ||
-			(r >= 0xfe10 && r <= 0xfe19) ||
-			(r >= 0xfe30 && r <= 0xfe6f) ||
-			(r >= 0xff00 && r <= 0xff60) ||
-			(r >= 0xffe0 && r <= 0xffe6) ||
-			(r >= 0x1f300 && r <= 0x1f64f) ||
-			(r >= 0x1f900 && r <= 0x1f9ff) ||
-			(r >= 0x20000 && r <= 0x3fffd)) {
-			runeWidth = 2
+		runeWidth := runeWidthForTest(r)
+		if runeWidth == 0 {
+			continue
 		}
 
 		if r == ' ' {
@@ -810,21 +858,9 @@ func displayWidth(text string) int {
 		switch {
 		case r == 0:
 			continue
-		case r >= 0x0300 && r <= 0x036f:
+		case isZeroWidthTestRune(r):
 			continue
-		case r >= 0x1100 && (r <= 0x115f ||
-			r == 0x2329 ||
-			r == 0x232a ||
-			(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
-			(r >= 0xac00 && r <= 0xd7a3) ||
-			(r >= 0xf900 && r <= 0xfaff) ||
-			(r >= 0xfe10 && r <= 0xfe19) ||
-			(r >= 0xfe30 && r <= 0xfe6f) ||
-			(r >= 0xff00 && r <= 0xff60) ||
-			(r >= 0xffe0 && r <= 0xffe6) ||
-			(r >= 0x1f300 && r <= 0x1f64f) ||
-			(r >= 0x1f900 && r <= 0x1f9ff) ||
-			(r >= 0x20000 && r <= 0x3fffd)):
+		case runeWidthForTest(r) == 2:
 			width += 2
 		default:
 			width++
@@ -849,9 +885,10 @@ func trimDisplayToWidth(text string, width int) string {
 		r, size := utf8.DecodeRuneInString(text)
 		text = text[size:]
 
-		runeWidth := 1
-		if runeWidthForTest(r) == 2 {
-			runeWidth = 2
+		runeWidth := runeWidthForTest(r)
+		if runeWidth == 0 {
+			b.WriteRune(r)
+			continue
 		}
 		if current+runeWidth > target {
 			break
@@ -883,6 +920,10 @@ func trimToDisplayWidth(text string, width int) string {
 		text = text[size:]
 
 		runeWidth := runeWidthForTest(r)
+		if runeWidth == 0 {
+			b.WriteRune(r)
+			continue
+		}
 		if current+runeWidth > width {
 			break
 		}
@@ -893,6 +934,9 @@ func trimToDisplayWidth(text string, width int) string {
 }
 
 func runeWidthForTest(r rune) int {
+	if isZeroWidthTestRune(r) {
+		return 0
+	}
 	if r >= 0x1100 && (r <= 0x115f ||
 		r == 0x2329 ||
 		r == 0x232a ||
@@ -909,4 +953,8 @@ func runeWidthForTest(r rune) int {
 		return 2
 	}
 	return 1
+}
+
+func isZeroWidthTestRune(r rune) bool {
+	return r >= 0x0300 && r <= 0x036f
 }
