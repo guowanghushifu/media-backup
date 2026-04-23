@@ -450,6 +450,7 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 
 func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	s.logRcloneCommand(job)
+	uploadedLinkIdentity, identityErr := linkedFileIdentity(job.linkPath)
 	err := s.copyJob(ctx, job)
 	if err != nil {
 		s.mu.Lock()
@@ -467,6 +468,29 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	job.active = false
 	job.summary = "上传完成"
 	s.mu.Unlock()
+
+	if identityErr != nil {
+		s.logger.Printf("stat linked file %s before upload: %v; skipping cleanup", job.linkPath, identityErr)
+		s.finishUploadSuccess(job)
+		return
+	}
+
+	sameLinkedFile, err := linkedFileMatchesIdentity(uploadedLinkIdentity, job.linkPath)
+	if err != nil {
+		s.logger.Printf("check linked file identity %s: %v", job.linkPath, err)
+		s.mu.Lock()
+		job.summary = fmt.Sprintf("清理失败: %v", err)
+		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
+		s.mu.Unlock()
+		s.scheduler.FinishFailed(job.key)
+		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
+		s.signalWake()
+		return
+	}
+	if !sameLinkedFile {
+		s.finishUploadSuccess(job)
+		return
+	}
 
 	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
 		if missing, statErr := linkedFileMissing(job.linkPath); statErr == nil && missing {
@@ -530,6 +554,25 @@ func linkedFileMissing(path string) (bool, error) {
 		return true, nil
 	}
 	return false, err
+}
+
+func linkedFileIdentity(path string) (os.FileInfo, error) {
+	return os.Stat(path)
+}
+
+func linkedFileMatchesIdentity(identity os.FileInfo, path string) (bool, error) {
+	if identity == nil {
+		return false, nil
+	}
+
+	current, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return os.SameFile(identity, current), nil
 }
 
 func formatShellCommand(args []string) string {

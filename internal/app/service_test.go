@@ -1241,6 +1241,136 @@ func TestRunUploadSuccessRemovesOnlyUploadedLinkedFile(t *testing.T) {
 	}
 }
 
+func TestRunUploadSamePathReplacementPreservesReplacementLink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	sourcePath := filepath.Join(sourceDir, "show", "episode-1.mkv")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("old-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	linkPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("LinkFile() error = %v", err)
+	}
+
+	cfgJob := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    sourceDir,
+		LinkDir:      linkDir,
+		RcloneRemote: "remote:movie",
+	}
+
+	s := newTestService()
+	s.cleanupLinkedFile = watcher.CleanupLinkedFile
+
+	var replacementTask *jobRuntime
+	s.copyJob = func(_ context.Context, job *jobRuntime) error {
+		gotBytes, err := os.ReadFile(job.linkPath)
+		if err != nil {
+			return err
+		}
+		if string(gotBytes) != "old-bytes" {
+			t.Fatalf("old upload read %q, want %q", string(gotBytes), "old-bytes")
+		}
+
+		if err := os.Remove(sourcePath); err != nil {
+			return err
+		}
+		if err := os.WriteFile(sourcePath, []byte("new-bytes"), 0o644); err != nil {
+			return err
+		}
+		relinkedPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+		if err != nil {
+			return err
+		}
+		if relinkedPath != linkPath {
+			t.Fatalf("replacement LinkFile() path = %q, want %q", relinkedPath, linkPath)
+		}
+
+		replacementTask, err = s.registerTask(cfgJob, sourcePath, linkPath)
+		if err != nil {
+			return err
+		}
+		s.scheduler.MarkDirty(replacementTask.key)
+		return nil
+	}
+
+	oldTask, err := s.registerTask(cfgJob, sourcePath, linkPath)
+	if err != nil {
+		t.Fatalf("registerTask() error = %v", err)
+	}
+	s.scheduler.MarkDirty(oldTask.key)
+	if !s.scheduler.TryStart(oldTask.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+	oldTask.active = true
+
+	s.runUpload(context.Background(), oldTask)
+
+	if replacementTask == nil {
+		t.Fatal("replacementTask = nil, want registered same-path replacement")
+	}
+	current := s.taskForKey(linkPath)
+	if current != replacementTask {
+		t.Fatalf("taskForKey() = %#v, want replacement task %#v", current, replacementTask)
+	}
+
+	gotBytes, err := os.ReadFile(linkPath)
+	if err != nil {
+		t.Fatalf("ReadFile(replacement link) error = %v", err)
+	}
+	if string(gotBytes) != "new-bytes" {
+		t.Fatalf("replacement link content = %q, want %q", string(gotBytes), "new-bytes")
+	}
+
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("Stat(replacement source) error = %v", err)
+	}
+	linkInfo, err := os.Stat(linkPath)
+	if err != nil {
+		t.Fatalf("Stat(replacement link) error = %v", err)
+	}
+	if !os.SameFile(sourceInfo, linkInfo) {
+		t.Fatal("replacement link is not a hard link to the replacement source")
+	}
+
+	s.copyJob = func(_ context.Context, job *jobRuntime) error {
+		gotBytes, err := os.ReadFile(job.linkPath)
+		if err != nil {
+			return err
+		}
+		if string(gotBytes) != "new-bytes" {
+			t.Fatalf("replacement upload read %q, want %q", string(gotBytes), "new-bytes")
+		}
+		return nil
+	}
+
+	started := make(chan *jobRuntime, 1)
+	s.startUpload = func(ctx context.Context, job *jobRuntime) {
+		s.runUpload(ctx, job)
+		started <- job
+	}
+
+	s.startReadyUploads(context.Background())
+
+	select {
+	case got := <-started:
+		if got != replacementTask {
+			t.Fatalf("startUpload() job = %#v, want replacement task %#v", got, replacementTask)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startUpload() not called, want replacement task to remain uploadable")
+	}
+}
+
 func TestRunUploadFailurePreservesLinkedFileAndRetriesOnlyFileKey(t *testing.T) {
 	t.Parallel()
 
