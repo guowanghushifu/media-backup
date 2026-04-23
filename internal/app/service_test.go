@@ -998,6 +998,24 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 
 	t.Run("cleanup failure enters retry", func(t *testing.T) {
 		s, job := makeService(time.Date(2026, 4, 23, 10, 0, 7, 0, time.UTC))
+		root := t.TempDir()
+		linkDir := filepath.Join(root, "link")
+		linkPath := filepath.Join(linkDir, "movie.mkv")
+		if err := os.MkdirAll(linkDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(linkPath, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		job.cfg.LinkDir = linkDir
+		job.key = linkPath
+		job.linkPath = linkPath
+		s.jobs = map[string]*jobRuntime{job.key: job}
+		s.scheduler = queue.New(queue.Options{MaxParallel: 5})
+		s.scheduler.MarkDirty(job.key)
+		if !s.scheduler.TryStart(job.key) {
+			t.Fatal("TryStart() = false, want true")
+		}
 		s.cleanupLinkedFile = func(string, string) error { return errors.New("cleanup failed") }
 
 		s.runUpload(context.Background(), job)
@@ -1012,6 +1030,68 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 			t.Fatalf("retryDue missing file key %q", job.linkPath)
 		}
 	})
+}
+
+func TestRunUploadTreatsPostDeleteCleanupErrorAsSuccess(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	linkDir := filepath.Join(root, "linked files")
+	linkPath := filepath.Join(linkDir, "season 1", "episode 1.mkv")
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(linkPath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestService()
+	s.cfg.RetryInterval = time.Minute
+	s.now = func() time.Time { return time.Date(2026, 4, 23, 10, 0, 8, 0, time.UTC) }
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.cleanupLinkedFile = func(string, string) error {
+		if err := os.Remove(linkPath); err != nil {
+			return err
+		}
+		return errors.New("prune failed")
+	}
+
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    filepath.Join(root, "source"),
+			LinkDir:      linkDir,
+			RcloneRemote: "remote:movie",
+		},
+		key:        linkPath,
+		sourcePath: filepath.Join(root, "source", "season 1", "episode 1.mkv"),
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/season 1/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if len(s.recentEvents) != 1 {
+		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
+	}
+	if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，任务清空" {
+		t.Fatalf("recentEvents[0].message = %q, want success event after post-delete cleanup error", got)
+	}
+	if _, ok := s.retryDue[job.key]; ok {
+		t.Fatalf("retryDue still contains completed task key %q", job.key)
+	}
+	if _, ok := s.jobs[job.key]; ok {
+		t.Fatalf("runtime task %q still exists after successful upload", job.key)
+	}
+	if _, err := os.Stat(linkPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("linked file still exists or wrong error = %v, want not exist", err)
+	}
 }
 
 func TestRunUploadSuccessRemovesOnlyUploadedLinkedFile(t *testing.T) {
@@ -1199,14 +1279,14 @@ func TestRunUploadLogsRcloneCommand(t *testing.T) {
 	job := &jobRuntime{
 		cfg: config.JobConfig{
 			Name:         "MOVIE",
-			SourceDir:    "/dld/upload/Movie-2025",
-			LinkDir:      "/dld/gd_upload/Movie-2025",
-			RcloneRemote: "gd1:/sync/Movie/Movie-2025",
+			SourceDir:    "/dld/upload/My Movie 2025",
+			LinkDir:      "/dld/gd upload/My Movie 2025",
+			RcloneRemote: "gd1:/sync/Movie/My Movie 2025",
 		},
-		key:        "/dld/gd_upload/Movie-2025/movie.mkv",
-		sourcePath: "/dld/upload/Movie-2025/movie.mkv",
-		linkPath:   "/dld/gd_upload/Movie-2025/movie.mkv",
-		remoteDir:  "gd1:/sync/Movie/Movie-2025",
+		key:        "/dld/gd upload/My Movie 2025/movie file.mkv",
+		sourcePath: "/dld/upload/My Movie 2025/movie file.mkv",
+		linkPath:   "/dld/gd upload/My Movie 2025/movie file.mkv",
+		remoteDir:  "gd1:/sync/Movie/My Movie 2025",
 		active:     true,
 	}
 	s.jobs[job.key] = job
@@ -1218,7 +1298,7 @@ func TestRunUploadLogsRcloneCommand(t *testing.T) {
 	s.runUpload(context.Background(), job)
 
 	got := buf.String()
-	want := "run rclone command for MOVIE: rclone copy /dld/gd_upload/Movie-2025/movie.mkv gd1:/sync/Movie/Movie-2025/ --stats=1s --stats-one-line -v\n"
+	want := "run rclone command for MOVIE: rclone copy '/dld/gd upload/My Movie 2025/movie file.mkv' 'gd1:/sync/Movie/My Movie 2025/' --stats=1s --stats-one-line -v\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("log output = %q, want substring %q", got, want)
 	}

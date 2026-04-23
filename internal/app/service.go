@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -466,6 +467,11 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	s.mu.Unlock()
 
 	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
+		if missing, statErr := linkedFileMissing(job.linkPath); statErr == nil && missing {
+			s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
+			s.finishUploadSuccess(job)
+			return
+		}
 		s.logger.Printf("cleanup linked file %s (root %s): %v", job.linkPath, job.cfg.LinkDir, err)
 		s.mu.Lock()
 		job.summary = fmt.Sprintf("清理失败: %v", err)
@@ -477,6 +483,10 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 		return
 	}
 
+	s.finishUploadSuccess(job)
+}
+
+func (s *Service) finishUploadSuccess(job *jobRuntime) {
 	s.scheduler.Finish(job.key, false)
 	s.removeTaskIfCompleted(job)
 	s.appendSchedulerEventNow(job, "上传完成，任务清空")
@@ -499,7 +509,7 @@ func (s *Service) logRcloneCommand(job *jobRuntime) {
 		return
 	}
 	args := append([]string{"rclone", "copy", job.linkPath, remoteDirWithTrailingSlash(job.remoteDir)}, s.cfg.RcloneArgs...)
-	s.logger.Printf("run rclone command for %s: %s", job.cfg.Name, strings.Join(args, " "))
+	s.logger.Printf("run rclone command for %s: %s", job.cfg.Name, formatShellCommand(args))
 }
 
 func remoteDirWithTrailingSlash(remoteDir string) string {
@@ -507,6 +517,49 @@ func remoteDirWithTrailingSlash(remoteDir string) string {
 		return remoteDir
 	}
 	return remoteDir + "/"
+}
+
+func linkedFileMissing(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	return false, err
+}
+
+func formatShellCommand(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuoteArg(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuoteArg(arg string) string {
+	if arg == "" {
+		return "''"
+	}
+	if isShellSafeArg(arg) {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+func isShellSafeArg(arg string) bool {
+	for _, r := range arg {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case strings.ContainsRune("@%_+=:,./-", r):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) uiLoop(ctx context.Context) {
