@@ -25,21 +25,21 @@ const maxRecentEvents = 10
 const uiKeepaliveInterval = 3 * time.Second
 
 type Service struct {
-	cfg             *config.Config
-	logger          *log.Logger
-	scheduler       *queue.Scheduler
-	watcher         *fsnotify.Watcher
-	uiWriter        io.Writer
-	mkdirAll        func(string, os.FileMode) error
-	addWatches      func(string) error
-	scanExisting    func(string, string, []string, time.Duration) (int, error)
-	scanLinkedFiles func(string, []string) ([]string, error)
-	copyJob         func(context.Context, *jobRuntime) error
-	cleanupLinkDir  func(string) error
-	startUpload     func(context.Context, *jobRuntime)
-	afterMarkDirty  func(string)
-	now             func() time.Time
-	uiWidth         func() int
+	cfg               *config.Config
+	logger            *log.Logger
+	scheduler         *queue.Scheduler
+	watcher           *fsnotify.Watcher
+	uiWriter          io.Writer
+	mkdirAll          func(string, os.FileMode) error
+	addWatches        func(string) error
+	scanExisting      func(string, string, []string, time.Duration) (int, error)
+	scanLinkedFiles   func(string, []string) ([]string, error)
+	copyJob           func(context.Context, *jobRuntime) error
+	cleanupLinkedFile func(string, string) error
+	startUpload       func(context.Context, *jobRuntime)
+	afterMarkDirty    func(string)
+	now               func() time.Time
+	uiWidth           func() int
 
 	mu           sync.Mutex
 	configJobs   map[string]config.JobConfig
@@ -82,22 +82,22 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	}
 
 	s := &Service{
-		cfg:             cfg,
-		logger:          logger,
-		scheduler:       queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
-		watcher:         fsWatcher,
-		uiWriter:        os.Stdout,
-		mkdirAll:        os.MkdirAll,
-		scanExisting:    watcher.ScanExistingAndLink,
-		scanLinkedFiles: watcher.ScanLinkedFiles,
-		cleanupLinkDir:  watcher.CleanupLinkDir,
-		now:             time.Now,
-		configJobs:      make(map[string]config.JobConfig, len(cfg.Jobs)),
-		jobs:            make(map[string]*jobRuntime),
-		processing:      map[string]struct{}{},
-		retryDue:        map[string]time.Time{},
-		wakeCh:          make(chan struct{}, 1),
-		uiWakeCh:        make(chan struct{}, 1),
+		cfg:               cfg,
+		logger:            logger,
+		scheduler:         queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
+		watcher:           fsWatcher,
+		uiWriter:          os.Stdout,
+		mkdirAll:          os.MkdirAll,
+		scanExisting:      watcher.ScanExistingAndLink,
+		scanLinkedFiles:   watcher.ScanLinkedFiles,
+		cleanupLinkedFile: watcher.CleanupLinkedFile,
+		now:               time.Now,
+		configJobs:        make(map[string]config.JobConfig, len(cfg.Jobs)),
+		jobs:              make(map[string]*jobRuntime),
+		processing:        map[string]struct{}{},
+		retryDue:          map[string]time.Time{},
+		wakeCh:            make(chan struct{}, 1),
+		uiWakeCh:          make(chan struct{}, 1),
 	}
 	s.addWatches = s.addRecursiveWatches
 	s.copyJob = s.copyWithRclone
@@ -465,8 +465,8 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	job.summary = "上传完成"
 	s.mu.Unlock()
 
-	if err := s.cleanupLinkDir(job.cfg.LinkDir); err != nil {
-		s.logger.Printf("cleanup %s: %v", job.cfg.LinkDir, err)
+	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
+		s.logger.Printf("cleanup linked file %s (root %s): %v", job.linkPath, job.cfg.LinkDir, err)
 		s.mu.Lock()
 		job.summary = fmt.Sprintf("清理失败: %v", err)
 		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
@@ -491,14 +491,14 @@ func (s *Service) copyWithRclone(ctx context.Context, job *jobRuntime) error {
 		},
 	}
 	runner := rclone.NewRunner(exec)
-	return runner.Copy(ctx, job.cfg.LinkDir, job.cfg.RcloneRemote, s.cfg.RcloneArgs)
+	return runner.CopyFile(ctx, job.linkPath, job.remoteDir, s.cfg.RcloneArgs)
 }
 
 func (s *Service) logRcloneCommand(job *jobRuntime) {
 	if s.logger == nil || job == nil {
 		return
 	}
-	args := append([]string{"rclone", "copy", job.cfg.LinkDir, job.cfg.RcloneRemote}, s.cfg.RcloneArgs...)
+	args := append([]string{"rclone", "copy", job.linkPath, job.remoteDir}, s.cfg.RcloneArgs...)
 	s.logger.Printf("run rclone command for %s: %s", job.cfg.Name, strings.Join(args, " "))
 }
 

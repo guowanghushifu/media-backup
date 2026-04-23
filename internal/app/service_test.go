@@ -16,6 +16,7 @@ import (
 	"github.com/guowanghushifu/media-backup/internal/config"
 	"github.com/guowanghushifu/media-backup/internal/queue"
 	"github.com/guowanghushifu/media-backup/internal/ui"
+	"github.com/guowanghushifu/media-backup/internal/watcher"
 )
 
 func TestSnapshotUIIncludesRecentEventsWhileIdle(t *testing.T) {
@@ -933,7 +934,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		s.cfg.RetryInterval = time.Minute
 		s.now = func() time.Time { return at }
 		s.copyJob = func(context.Context, *jobRuntime) error { return nil }
-		s.cleanupLinkDir = func(string) error { return nil }
+		s.cleanupLinkedFile = func(string, string) error { return nil }
 		linkPath := "/link/movie.mkv"
 		job := &jobRuntime{
 			cfg: config.JobConfig{
@@ -997,7 +998,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 
 	t.Run("cleanup failure enters retry", func(t *testing.T) {
 		s, job := makeService(time.Date(2026, 4, 23, 10, 0, 7, 0, time.UTC))
-		s.cleanupLinkDir = func(string) error { return errors.New("cleanup failed") }
+		s.cleanupLinkedFile = func(string, string) error { return errors.New("cleanup failed") }
 
 		s.runUpload(context.Background(), job)
 
@@ -1011,6 +1012,121 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 			t.Fatalf("retryDue missing file key %q", job.linkPath)
 		}
 	})
+}
+
+func TestRunUploadSuccessRemovesOnlyUploadedLinkedFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	linkDir := filepath.Join(root, "link")
+	uploadedLink := filepath.Join(linkDir, "season1", "episode1.mkv")
+	siblingLink := filepath.Join(linkDir, "season1", "episode2.mkv")
+	siblingDir := filepath.Join(linkDir, "season2")
+	if err := os.MkdirAll(filepath.Dir(uploadedLink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(siblingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(uploadedLink, []byte("ep1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(siblingLink, []byte("ep2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(siblingDir, "readme.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestService()
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.cleanupLinkedFile = watcher.CleanupLinkedFile
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    filepath.Join(root, "source"),
+			LinkDir:      linkDir,
+			RcloneRemote: "remote:movie",
+		},
+		key:        uploadedLink,
+		sourcePath: filepath.Join(root, "source", "season1", "episode1.mkv"),
+		linkPath:   uploadedLink,
+		remoteDir:  "remote:movie/season1/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if _, err := os.Stat(uploadedLink); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uploaded link still exists or wrong error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(siblingLink); err != nil {
+		t.Fatalf("sibling link removed unexpectedly: %v", err)
+	}
+	if _, err := os.Stat(siblingDir); err != nil {
+		t.Fatalf("sibling directory removed unexpectedly: %v", err)
+	}
+}
+
+func TestRunUploadFailurePreservesLinkedFileAndRetriesOnlyFileKey(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	linkDir := filepath.Join(root, "link")
+	uploadedLink := filepath.Join(linkDir, "season1", "episode1.mkv")
+	siblingLink := filepath.Join(linkDir, "season1", "episode2.mkv")
+	if err := os.MkdirAll(filepath.Dir(uploadedLink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{uploadedLink, siblingLink} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := newTestService()
+	s.cfg.RetryInterval = time.Minute
+	s.now = func() time.Time { return time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC) }
+	s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
+	s.cleanupLinkedFile = watcher.CleanupLinkedFile
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    filepath.Join(root, "source"),
+			LinkDir:      linkDir,
+			RcloneRemote: "remote:movie",
+		},
+		key:        uploadedLink,
+		sourcePath: filepath.Join(root, "source", "season1", "episode1.mkv"),
+		linkPath:   uploadedLink,
+		remoteDir:  "remote:movie/season1/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if _, err := os.Stat(uploadedLink); err != nil {
+		t.Fatalf("uploaded link should be preserved on failure: %v", err)
+	}
+	if _, err := os.Stat(siblingLink); err != nil {
+		t.Fatalf("sibling link should be preserved on failure: %v", err)
+	}
+	if len(s.retryDue) != 1 {
+		t.Fatalf("len(retryDue) = %d, want 1", len(s.retryDue))
+	}
+	if _, ok := s.retryDue[job.key]; !ok {
+		t.Fatalf("retryDue missing uploaded file key %q", job.key)
+	}
 }
 
 func TestRunUploadBindsRcloneOutputToJob(t *testing.T) {
@@ -1049,7 +1165,7 @@ func TestRunUploadBindsRcloneOutputToJob(t *testing.T) {
 		s.handleRcloneOutputLine(gotJob, "2026/04/23 10:00:08 INFO  : nested/file.mkv: Copied (new)", s.now)
 		return nil
 	}
-	s.cleanupLinkDir = func(string) error { return nil }
+	s.cleanupLinkedFile = func(string, string) error { return nil }
 	s.scheduler.MarkDirty(job.key)
 	if !s.scheduler.TryStart(job.key) {
 		t.Fatal("TryStart() = false, want true")
@@ -1079,7 +1195,7 @@ func TestRunUploadLogsRcloneCommand(t *testing.T) {
 	s.logger = log.New(&buf, "", 0)
 	s.cfg.RcloneArgs = []string{"--stats=1s", "--stats-one-line", "-v"}
 	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
-	s.cleanupLinkDir = func(string) error { return nil }
+	s.cleanupLinkedFile = func(string, string) error { return nil }
 	job := &jobRuntime{
 		cfg: config.JobConfig{
 			Name:         "MOVIE",
@@ -1102,9 +1218,62 @@ func TestRunUploadLogsRcloneCommand(t *testing.T) {
 	s.runUpload(context.Background(), job)
 
 	got := buf.String()
-	want := "run rclone command for MOVIE: rclone copy /dld/gd_upload/Movie-2025 gd1:/sync/Movie/Movie-2025 --stats=1s --stats-one-line -v\n"
+	want := "run rclone command for MOVIE: rclone copy /dld/gd_upload/Movie-2025/movie.mkv gd1:/sync/Movie/Movie-2025/ --stats=1s --stats-one-line -v\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("log output = %q, want substring %q", got, want)
+	}
+}
+
+func TestCopyWithRcloneUsesLinkedFileAndRemoteDir(t *testing.T) {
+	root := t.TempDir()
+	binaryPath := filepath.Join(root, "rclone")
+	capturePath := filepath.Join(root, "captured-args.txt")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$RCLONE_ARGS_CAPTURE\"\n"
+	if err := os.WriteFile(binaryPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("RCLONE_ARGS_CAPTURE", capturePath)
+
+	s := newTestService()
+	s.cfg.RcloneArgs = []string{"--stats=1s", "--stats-one-line", "-v"}
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    "/dld/upload/Movie-2025",
+			LinkDir:      "/dld/gd_upload/Movie-2025",
+			RcloneRemote: "gd1:/sync/Movie/Movie-2025",
+		},
+		key:        "/dld/gd_upload/Movie-2025/movie.mkv",
+		sourcePath: "/dld/upload/Movie-2025/movie.mkv",
+		linkPath:   "/dld/gd_upload/Movie-2025/movie.mkv",
+		remoteDir:  "gd1:/sync/Movie/Movie-2025/",
+	}
+
+	if err := s.copyWithRclone(context.Background(), job); err != nil {
+		t.Fatalf("copyWithRclone() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", capturePath, err)
+	}
+	got := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	want := []string{
+		"copy",
+		"/dld/gd_upload/Movie-2025/movie.mkv",
+		"gd1:/sync/Movie/Movie-2025/",
+		"--stats=1s",
+		"--stats-one-line",
+		"-v",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("captured args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("captured args = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -1176,15 +1345,16 @@ func TestReleaseRetriesDoesNotRecordEventBeforeDueTime(t *testing.T) {
 
 func newTestService() *Service {
 	return &Service{
-		cfg:             &config.Config{MaxParallelUploads: 5},
-		logger:          log.New(io.Discard, "", 0),
-		scheduler:       queue.New(queue.Options{MaxParallel: 5}),
-		configJobs:      map[string]config.JobConfig{},
-		jobs:            map[string]*jobRuntime{},
-		scanLinkedFiles: func(string, []string) ([]string, error) { return nil, nil },
-		retryDue:        map[string]time.Time{},
-		wakeCh:          make(chan struct{}, 1),
-		uiWakeCh:        make(chan struct{}, 1),
+		cfg:               &config.Config{MaxParallelUploads: 5},
+		logger:            log.New(io.Discard, "", 0),
+		scheduler:         queue.New(queue.Options{MaxParallel: 5}),
+		configJobs:        map[string]config.JobConfig{},
+		jobs:              map[string]*jobRuntime{},
+		scanLinkedFiles:   func(string, []string) ([]string, error) { return nil, nil },
+		cleanupLinkedFile: func(string, string) error { return nil },
+		retryDue:          map[string]time.Time{},
+		wakeCh:            make(chan struct{}, 1),
+		uiWakeCh:          make(chan struct{}, 1),
 	}
 }
 
