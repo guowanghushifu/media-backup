@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -850,6 +851,43 @@ func TestProcessFileClearsRetryWaitForSamePathUpdate(t *testing.T) {
 	if ready := s.scheduler.Ready(); len(ready) != 1 || ready[0] != linkPath {
 		t.Fatalf("Ready() = %v, want [%q] after retry wait is cleared", ready, linkPath)
 	}
+	if _, ok := s.failureCounts[linkPath]; ok {
+		t.Fatalf("failureCounts[%q] exists, want retry-wait replacement to clear failures", linkPath)
+	}
+}
+
+func TestRegisterTaskLockedInactiveReregistrationKeepsFailureCount(t *testing.T) {
+	t.Parallel()
+
+	cfgJob := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link", RcloneRemote: "remote:movie"}
+	linkPath := "/link/movie.mkv"
+	s := newTestService()
+	s.jobs[linkPath] = &jobRuntime{
+		cfg:        cfgJob,
+		key:        linkPath,
+		sourcePath: "/source/movie.mkv",
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+		active:     false,
+	}
+	s.failureCounts[linkPath] = 2
+
+	task, state, err := s.registerTaskLocked(cfgJob, "/source/movie.mkv", linkPath)
+	if err != nil {
+		t.Fatalf("registerTaskLocked() error = %v", err)
+	}
+	if task == nil {
+		t.Fatal("registerTaskLocked() task = nil, want task")
+	}
+	if state.replacedRunning {
+		t.Fatal("state.replacedRunning = true, want false")
+	}
+	if state.clearedRetryWait {
+		t.Fatal("state.clearedRetryWait = true, want false")
+	}
+	if got := s.failureCounts[linkPath]; got != 2 {
+		t.Fatalf("failureCounts[%q] = %d, want 2 after ordinary re-registration", linkPath, got)
+	}
 }
 
 func TestProcessFileUsesSupersedeEventForActiveFileTask(t *testing.T) {
@@ -1677,7 +1715,7 @@ func TestRunUploadSuccessClearsFailureCount(t *testing.T) {
 	}
 }
 
-func TestProcessFileSamePathReplacementClearsFailureCount(t *testing.T) {
+func TestProcessFileRetryWaitReplacementClearsFailureCount(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -1702,6 +1740,19 @@ func TestProcessFileSamePathReplacementClearsFailureCount(t *testing.T) {
 	s.cfg.StableDuration = time.Millisecond
 	s.cfg.PollInterval = time.Millisecond
 	s.failureCounts[linkPath] = 2
+	s.jobs[linkPath] = &jobRuntime{
+		cfg:        cfgJob,
+		key:        linkPath,
+		sourcePath: sourcePath,
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+	}
+	s.scheduler.MarkDirty(linkPath)
+	if !s.scheduler.TryStart(linkPath) {
+		t.Fatal("TryStart() = false, want true")
+	}
+	s.scheduler.FinishFailed(linkPath)
+	s.retryDue[linkPath] = s.currentTime().Add(time.Minute)
 
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
@@ -1713,7 +1764,7 @@ func TestProcessFileSamePathReplacementClearsFailureCount(t *testing.T) {
 	s.processFile(context.Background(), cfgJob, sourcePath)
 
 	if _, ok := s.failureCounts[linkPath]; ok {
-		t.Fatalf("failureCounts still contains %q after same-path replacement", linkPath)
+		t.Fatalf("failureCounts still contains %q after retry-wait replacement", linkPath)
 	}
 }
 
@@ -1749,6 +1800,28 @@ func TestRunUploadRetryLimitNotificationErrorIsLoggedOnly(t *testing.T) {
 	}
 	if _, ok := s.retryDue[job.key]; ok {
 		t.Fatalf("retryDue[%q] exists, want retry to stay stopped after notify error", job.key)
+	}
+}
+
+func TestNewTelegramNotifierUsesBoundedHTTPTimeout(t *testing.T) {
+	t.Parallel()
+
+	n := newTelegramNotifier(config.TelegramConfig{
+		Enabled:  true,
+		BotToken: "token",
+		ChatID:   "chat",
+	})
+	if n == nil {
+		t.Fatal("newTelegramNotifier() = nil, want notifier")
+	}
+	if n.client == nil {
+		t.Fatal("notifier client = nil, want http client")
+	}
+	if n.client == http.DefaultClient {
+		t.Fatal("notifier client reused http.DefaultClient, want dedicated bounded client")
+	}
+	if n.client.Timeout != telegramNotifyTimeout {
+		t.Fatalf("client.Timeout = %v, want %v", n.client.Timeout, telegramNotifyTimeout)
 	}
 }
 

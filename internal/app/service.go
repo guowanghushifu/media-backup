@@ -126,7 +126,9 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		if notifier == nil {
 			return nil
 		}
-		return notifier.NotifyFinalFailure(context.Background(), event)
+		ctx, cancel := context.WithTimeout(context.Background(), telegramNotifyTimeout)
+		defer cancel()
+		return notifier.NotifyFinalFailure(ctx, event)
 	}
 	s.uiWidth = func() int {
 		return ui.DetectWidth(s.uiWriter)
@@ -364,7 +366,6 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 		state.replacedRunning = true
 		cancelRunning = current.cancel
 	}
-	_, hadFailures := s.failureCounts[linkPath]
 	task.cfg = cfgJob
 	task.key = linkPath
 	task.sourcePath = sourcePath
@@ -376,7 +377,7 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 	if state.clearedRetryWait {
 		delete(s.retryDue, linkPath)
 	}
-	if state.clearedRetryWait || state.replacedRunning || hadFailures {
+	if state.clearedRetryWait || state.replacedRunning {
 		delete(s.failureCounts, linkPath)
 	}
 	s.mu.Unlock()

@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/guowanghushifu/media-backup/internal/config"
 )
+
+const telegramNotifyTimeout = 5 * time.Second
 
 type jobFailureNotification struct {
 	JobName    string
@@ -28,7 +31,7 @@ func newTelegramNotifier(cfg config.TelegramConfig) *telegramNotifier {
 		return nil
 	}
 	return &telegramNotifier{
-		client:   http.DefaultClient,
+		client:   &http.Client{Timeout: telegramNotifyTimeout},
 		botToken: cfg.BotToken,
 		chatID:   cfg.ChatID,
 	}
