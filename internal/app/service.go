@@ -407,9 +407,13 @@ func (s *Service) linkAndQueueTask(cfgJob config.JobConfig, sourcePath string) (
 	if err != nil {
 		return nil, queueTaskState{}, err
 	}
+	resetFailuresForReplacement := s.shouldResetFailureCountForSamePathUpdate(linkPath)
 	task, state, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
 	if err != nil {
 		return nil, queueTaskState{}, err
+	}
+	if resetFailuresForReplacement {
+		s.clearFailureCount(linkPath)
 	}
 	s.scheduler.MarkDirty(task.key)
 	s.runAfterMarkDirty(task.key)
@@ -600,6 +604,18 @@ func (s *Service) incrementFailureCount(key string) int {
 	}
 	s.failureCounts[key]++
 	return s.failureCounts[key]
+}
+
+func (s *Service) shouldResetFailureCountForSamePathUpdate(key string) bool {
+	if key == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.jobs[key]; !ok {
+		return false
+	}
+	return s.failureCounts[key] > 0
 }
 
 func (s *Service) finishUploadFailureLocked(job *jobRuntime, summary string) {

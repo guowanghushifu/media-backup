@@ -1768,6 +1768,73 @@ func TestProcessFileRetryWaitReplacementClearsFailureCount(t *testing.T) {
 	}
 }
 
+func TestProcessFileTerminalFailedReplacementResetsFailureCount(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	linkPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("LinkFile() error = %v", err)
+	}
+
+	cfgJob := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movie"}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Millisecond
+	s.cfg.PollInterval = time.Millisecond
+	s.cfg.RetryInterval = time.Minute
+	s.cfg.MaxRetryCount = 2
+	s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
+	s.jobs[linkPath] = &jobRuntime{
+		cfg:        cfgJob,
+		key:        linkPath,
+		sourcePath: sourcePath,
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+		active:     false,
+	}
+	s.failureCounts[linkPath] = 2
+
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s.processFile(context.Background(), cfgJob, sourcePath)
+
+	if got := s.failureCounts[linkPath]; got != 0 {
+		t.Fatalf("failureCounts[%q] = %d after replacement, want cleared before next upload", linkPath, got)
+	}
+	ready := s.scheduler.Ready()
+	if len(ready) != 1 || ready[0] != linkPath {
+		t.Fatalf("Ready() = %v, want [%q] after replacement", ready, linkPath)
+	}
+	if !s.scheduler.TryStart(linkPath) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), s.jobs[linkPath])
+
+	if got := s.failureCounts[linkPath]; got != 1 {
+		t.Fatalf("failureCounts[%q] = %d after first failure of replacement, want 1", linkPath, got)
+	}
+	if _, ok := s.retryDue[linkPath]; !ok {
+		t.Fatalf("retryDue[%q] missing, want replacement to retry after first failure", linkPath)
+	}
+}
+
 func TestRunUploadRetryLimitNotificationErrorIsLoggedOnly(t *testing.T) {
 	t.Parallel()
 
