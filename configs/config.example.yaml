@@ -1,12 +1,17 @@
+# 文件稳定检测参数，默认稳定30秒后开始处理
 poll_interval: 1s
 stable_duration: 30s
+# 文件上传失败后，等待指定时间后重试
 retry_interval: 10m
+# rclone并发上传任务数量
 max_parallel_uploads: 5
+# 文件监控后缀列表
 extensions:
   - .mkv
   - .mp4
   - .m2ts
   - .ts
+# rclone上传参数
 rclone_args:
   - --drive-chunk-size=256M
   - --checkers=5
@@ -15,7 +20,7 @@ rclone_args:
   - --stats=1s
   - --stats-one-line
   - -v
-
+# HTTP代理设置，enabled = true才会生效
 proxy:
   enabled: false
   scheme: http
@@ -23,7 +28,7 @@ proxy:
   port: 7890
   username: ""
   password: ""
-
+# 任务列表，source_dir是监控源目录，link_dir是硬链接目录，rclone_remote是rclone远端目录
 jobs:
   - name: 4K-REMUX
     source_dir: /dld/upload/4K.REMUX.SGNB
