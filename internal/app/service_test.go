@@ -1206,7 +1206,7 @@ func TestRunUploadLogsRcloneCommand(t *testing.T) {
 		key:        "/dld/gd_upload/Movie-2025/movie.mkv",
 		sourcePath: "/dld/upload/Movie-2025/movie.mkv",
 		linkPath:   "/dld/gd_upload/Movie-2025/movie.mkv",
-		remoteDir:  "gd1:/sync/Movie/Movie-2025/",
+		remoteDir:  "gd1:/sync/Movie/Movie-2025",
 		active:     true,
 	}
 	s.jobs[job.key] = job
@@ -1247,7 +1247,7 @@ func TestCopyWithRcloneUsesLinkedFileAndRemoteDir(t *testing.T) {
 		key:        "/dld/gd_upload/Movie-2025/movie.mkv",
 		sourcePath: "/dld/upload/Movie-2025/movie.mkv",
 		linkPath:   "/dld/gd_upload/Movie-2025/movie.mkv",
-		remoteDir:  "gd1:/sync/Movie/Movie-2025/",
+		remoteDir:  "gd1:/sync/Movie/Movie-2025",
 	}
 
 	if err := s.copyWithRclone(context.Background(), job); err != nil {

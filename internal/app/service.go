@@ -491,15 +491,22 @@ func (s *Service) copyWithRclone(ctx context.Context, job *jobRuntime) error {
 		},
 	}
 	runner := rclone.NewRunner(exec)
-	return runner.CopyFile(ctx, job.linkPath, job.remoteDir, s.cfg.RcloneArgs)
+	return runner.CopyFile(ctx, job.linkPath, remoteDirWithTrailingSlash(job.remoteDir), s.cfg.RcloneArgs)
 }
 
 func (s *Service) logRcloneCommand(job *jobRuntime) {
 	if s.logger == nil || job == nil {
 		return
 	}
-	args := append([]string{"rclone", "copy", job.linkPath, job.remoteDir}, s.cfg.RcloneArgs...)
+	args := append([]string{"rclone", "copy", job.linkPath, remoteDirWithTrailingSlash(job.remoteDir)}, s.cfg.RcloneArgs...)
 	s.logger.Printf("run rclone command for %s: %s", job.cfg.Name, strings.Join(args, " "))
+}
+
+func remoteDirWithTrailingSlash(remoteDir string) string {
+	if remoteDir == "" || strings.HasSuffix(remoteDir, "/") {
+		return remoteDir
+	}
+	return remoteDir + "/"
 }
 
 func (s *Service) uiLoop(ctx context.Context) {
