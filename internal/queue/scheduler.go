@@ -162,6 +162,24 @@ func (s *Scheduler) RetryAfter() time.Duration {
 	return s.retryAfter
 }
 
+func (s *Scheduler) Forget(job string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.jobs[job]
+	if !ok {
+		return false
+	}
+	if state.queued || state.running || state.pendingRetry {
+		return false
+	}
+
+	delete(s.jobs, job)
+	delete(s.retries, job)
+	s.remove(job)
+	return true
+}
+
 func (s *Scheduler) ensure(job string) *jobState {
 	if state, ok := s.jobs[job]; ok {
 		return state

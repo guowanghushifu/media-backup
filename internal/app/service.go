@@ -319,7 +319,7 @@ func (s *Service) registerTask(cfgJob config.JobConfig, sourcePath, linkPath str
 		s.jobs = map[string]*jobRuntime{}
 	}
 	task := s.jobs[linkPath]
-	if task == nil {
+	if task == nil || task.active {
 		task = &jobRuntime{}
 		s.jobs[linkPath] = task
 	}
@@ -359,20 +359,23 @@ func (s *Service) activateTaskForUpload(key string) *jobRuntime {
 	return job
 }
 
-func (s *Service) removeTaskIfCompleted(key string) {
-	if s.isJobReady(key) || s.isRetryWaiting(key) {
+func (s *Service) removeTaskIfCompleted(job *jobRuntime) {
+	if job == nil {
+		return
+	}
+	if !s.scheduler.Forget(job.key) {
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	job := s.jobs[key]
-	if job == nil || job.active {
+	current := s.jobs[job.key]
+	if current == nil || current != job || current.active {
 		return
 	}
-	delete(s.jobs, key)
-	delete(s.retryDue, key)
+	delete(s.jobs, job.key)
+	delete(s.retryDue, job.key)
 }
 
 func sourcePathFromLinkedPath(sourceDir, linkDir, linkPath string) (string, error) {
@@ -434,6 +437,7 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 		job := s.activateTaskForUpload(key)
 		if job == nil {
 			s.scheduler.Finish(key, false)
+			s.scheduler.Forget(key)
 			continue
 		}
 		s.appendSchedulerEventNow(job, "调度开始上传")
@@ -474,7 +478,7 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	}
 
 	s.scheduler.Finish(job.key, false)
-	s.removeTaskIfCompleted(job.key)
+	s.removeTaskIfCompleted(job)
 	s.appendSchedulerEventNow(job, "上传完成，任务清空")
 	s.signalWake()
 }

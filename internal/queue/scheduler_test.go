@@ -119,3 +119,27 @@ func TestSchedulerReadyOrderingStable(t *testing.T) {
 		t.Fatalf("Ready() = %v, want [job-a job-b job-c]", ready)
 	}
 }
+
+func TestSchedulerForgetDeletesTerminalJobState(t *testing.T) {
+	t.Parallel()
+
+	s := queue.New(queue.Options{MaxParallel: 1, RetryInterval: 10 * time.Minute})
+	s.MarkDirty("job-a")
+	if !s.TryStart("job-a") {
+		t.Fatal("expected job-a to start")
+	}
+	s.Finish("job-a", false)
+
+	if !s.Forget("job-a") {
+		t.Fatal("Forget(job-a) = false, want true for terminal job")
+	}
+	if s.Forget("job-a") {
+		t.Fatal("Forget(job-a) = true after deletion, want false")
+	}
+
+	s.MarkDirty("job-a")
+	ready := s.Ready()
+	if len(ready) != 1 || ready[0] != "job-a" {
+		t.Fatalf("Ready() = %v, want [job-a] after re-adding forgotten key", ready)
+	}
+}

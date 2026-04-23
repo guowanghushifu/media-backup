@@ -872,6 +872,59 @@ func TestStartReadyUploadsStartsMultipleSiblingFilesUpToLimit(t *testing.T) {
 	}
 }
 
+func TestStartReadyUploadsForgetsQueuedKeyWithoutRuntimeTask(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	linkPath := "/link/orphan.mkv"
+	s.scheduler.MarkDirty(linkPath)
+
+	s.startReadyUploads(context.Background())
+
+	if s.scheduler.Forget(linkPath) {
+		t.Fatalf("Forget(%q) = true, want false after service orphan cleanup", linkPath)
+	}
+}
+
+func TestRegisterTaskRefreshKeepsNewFileTaskWhenOldUploadCompletes(t *testing.T) {
+	t.Parallel()
+
+	cfgJob := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    "/source",
+		LinkDir:      "/link",
+		RcloneRemote: "remote:movie",
+	}
+	linkPath := "/link/movie.mkv"
+	oldTask := &jobRuntime{
+		cfg:        cfgJob,
+		key:        linkPath,
+		sourcePath: "/source/movie-old.mkv",
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+
+	s := newTestService()
+	s.jobs[linkPath] = oldTask
+
+	newTask, err := s.registerTask(cfgJob, "/source/movie.mkv", linkPath)
+	if err != nil {
+		t.Fatalf("registerTask() error = %v", err)
+	}
+	oldTask.active = false
+
+	s.removeTaskIfCompleted(oldTask)
+
+	current := s.taskForKey(linkPath)
+	if current == nil {
+		t.Fatal("taskForKey() = nil, want refreshed task retained")
+	}
+	if current != newTask {
+		t.Fatalf("taskForKey() = %#v, want refreshed task %#v", current, newTask)
+	}
+}
+
 func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 	t.Parallel()
 
@@ -919,6 +972,9 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		}
 		if _, ok := s.retryDue[job.key]; ok {
 			t.Fatalf("retryDue still contains completed task key %q", job.key)
+		}
+		if s.scheduler.Forget(job.key) {
+			t.Fatalf("Forget(%q) = true, want false after successful cleanup", job.key)
 		}
 	})
 
