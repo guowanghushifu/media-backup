@@ -72,6 +72,23 @@ func TestSnapshotUISortsActiveJobsByName(t *testing.T) {
 	}
 }
 
+func TestSnapshotUIReturnsNewestEventsFirst(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	base := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	s.appendRecentEvent(base.Add(-2*time.Second), "older")
+	s.appendRecentEvent(base.Add(-1*time.Second), "newer")
+
+	_, events, _ := s.snapshotUI()
+	if got, want := events[0].Message, "newer"; got != want {
+		t.Fatalf("events[0].Message = %q, want %q", got, want)
+	}
+	if got, want := events[1].Message, "older"; got != want {
+		t.Fatalf("events[1].Message = %q, want %q", got, want)
+	}
+}
+
 func TestAppendRecentEventKeepsOnlyLatestTen(t *testing.T) {
 	t.Parallel()
 

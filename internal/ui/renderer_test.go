@@ -21,9 +21,9 @@ func TestRenderIdle(t *testing.T) {
 		"│ No active transfers │",
 		"└──────────────────────┘",
 		"",
-		"┌─ RECENT EVENTS ─┐",
-		"│ 暂无事件      │",
-		"└────────────────┘",
+		"┌─ RECENT EVENTS (0) ─────────┐",
+		"│ Watching for new files... │",
+		"└────────────────────────────┘",
 	}, "\n")
 
 	if got := ui.RenderIdle(now); got != want {
@@ -40,8 +40,8 @@ func TestRenderActiveDashboard(t *testing.T) {
 		{Name: "job-b", Summary: "12.4 GiB / 40.0 GiB, 31%, 48.2 MiB/s, ETA 9m12s"},
 	}
 	events := []ui.EventRecord{
-		{At: time.Date(2026, 4, 22, 15, 3, 58, 0, time.UTC), Message: "THIS_IS_TEST/file-01.mkv: Copied (new)"},
 		{At: time.Date(2026, 4, 22, 15, 4, 3, 0, time.UTC), Message: "THIS_IS_TEST/file-02.mkv: Copied (new)"},
+		{At: time.Date(2026, 4, 22, 15, 3, 58, 0, time.UTC), Message: "THIS_IS_TEST/file-01.mkv: Copied (new)"},
 	}
 	out := ui.RenderDashboard(
 		now,
@@ -61,10 +61,10 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ job-b       31%       48.2 MiB/s  ETA 09:12  COPYING   │",
 		"└─────────────────────────────────────────────────────────┘",
 		"",
-		"┌─ RECENT EVENTS ────────────────────────────────────────────────┐",
-		"│ [2026-04-22 15:03:58] THIS_IS_TEST/file-01.mkv: Copied (new) │",
-		"│ [2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new) │",
-		"└───────────────────────────────────────────────────────────────┘",
+		"┌─ RECENT EVENTS (2) ────────────────────────────────────────┐",
+		"│ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new) │",
+		"│ 15:03:58  DONE    THIS_IS_TEST/file-01.mkv: Copied (new) │",
+		"└───────────────────────────────────────────────────────────┘",
 	}
 	want := strings.Join(wantLines, "\n")
 	if got := out; got != want {
@@ -103,9 +103,9 @@ func TestRenderDashboardIdleIncludesRecentEvents(t *testing.T) {
 		"│ No active transfers │",
 		"└──────────────────────┘",
 		"",
-		"┌─ RECENT EVENTS ────────────────────────────────────────────────┐",
-		"│ [2026-04-22 15:04:03] THIS_IS_TEST/file-02.mkv: Copied (new) │",
-		"└───────────────────────────────────────────────────────────────┘",
+		"┌─ RECENT EVENTS (1) ────────────────────────────────────────┐",
+		"│ 15:04:03  DONE    THIS_IS_TEST/file-02.mkv: Copied (new) │",
+		"└───────────────────────────────────────────────────────────┘",
 	}, "\n")
 	if got := out; got != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -131,9 +131,9 @@ func TestRenderDashboardShowsQueuedStatusWithoutActiveJobs(t *testing.T) {
 		"│ No active transfers │",
 		"└──────────────────────┘",
 		"",
-		"┌─ RECENT EVENTS ─┐",
-		"│ 暂无事件      │",
-		"└────────────────┘",
+		"┌─ RECENT EVENTS (0) ─────────┐",
+		"│ Watching for new files... │",
+		"└────────────────────────────┘",
 	}, "\n")
 	if got := out; got != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -162,9 +162,9 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		"│ job-a       83%       29.793 MiB/s  ETA 00:05  COPYING │",
 		"└─────────────────────────────────────────────────────────┘",
 		"",
-		"┌─ RECENT EVENTS ─┐",
-		"│ 暂无事件      │",
-		"└────────────────┘",
+		"┌─ RECENT EVENTS (0) ─────────┐",
+		"│ Watching for new files... │",
+		"└────────────────────────────┘",
 	}, "\n")
 	if got := out; got != want {
 		t.Fatalf("RenderDashboard() = %q, want %q", out, want)
@@ -223,6 +223,80 @@ func TestRenderDashboardShowsMetricSummaryAndStructuredJobs(t *testing.T) {
 	}
 }
 
+func TestRenderDashboardShowsTaggedRecentEventsNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		nil,
+		[]ui.EventRecord{
+			{At: time.Date(2026, 4, 23, 9, 29, 59, 0, time.UTC), Message: "THIS_IS_TEST/file-02.mkv: Copied (new)"},
+			{At: time.Date(2026, 4, 23, 9, 29, 58, 0, time.UTC), Message: "[movie] 启动扫描发现 3 个文件，任务标记为待上传"},
+		},
+		0,
+		5,
+	)
+
+	if !strings.Contains(out, "RECENT EVENTS (2)") {
+		t.Fatalf("RenderDashboard() missing event count in %q", out)
+	}
+	first := strings.Index(out, "09:29:59")
+	second := strings.Index(out, "09:29:58")
+	if first == -1 || second == -1 || first > second {
+		t.Fatalf("RenderDashboard() event order is not newest first: %q", out)
+	}
+	for _, want := range []string{"DONE", "SCAN", "THIS_IS_TEST/file-02.mkv", "[movie] 启动扫描发现 3 个文件"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderDashboard() missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestRenderDashboardTagsFailureEventsBeforeRetryQueue(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		nil,
+		[]ui.EventRecord{
+			{At: time.Date(2026, 4, 23, 9, 29, 59, 0, time.UTC), Message: "[movie] 上传失败，进入重试等待"},
+		},
+		0,
+		5,
+	)
+
+	if !strings.Contains(out, "09:29:59  FAIL") {
+		t.Fatalf("RenderDashboard() missing FAIL tag for retrying failure event in %q", out)
+	}
+	if strings.Contains(out, "09:29:59  QUEUE") {
+		t.Fatalf("RenderDashboard() mis-tagged retrying failure event as QUEUE in %q", out)
+	}
+}
+
+func TestRenderDashboardPreservesProvidedEventOrder(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		nil,
+		[]ui.EventRecord{
+			{At: time.Date(2026, 4, 23, 9, 29, 58, 0, time.UTC), Message: "older"},
+			{At: time.Date(2026, 4, 23, 9, 29, 59, 0, time.UTC), Message: "newer"},
+		},
+		0,
+		5,
+	)
+
+	first := strings.Index(out, "09:29:58")
+	second := strings.Index(out, "09:29:59")
+	if first == -1 || second == -1 || first > second {
+		t.Fatalf("RenderDashboard() did not preserve provided event order: %q", out)
+	}
+}
+
 func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 	t.Parallel()
 
@@ -259,5 +333,24 @@ func TestRenderDashboardFormatsHourETAInStructuredJobs(t *testing.T) {
 
 	if !strings.Contains(out, "ETA 01:02:03") {
 		t.Fatalf("RenderDashboard() missing hour ETA format in %q", out)
+	}
+}
+
+func TestRenderDashboardShowsMonthDayTimeForOlderEvents(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		nil,
+		[]ui.EventRecord{
+			{At: time.Date(2026, 4, 22, 23, 59, 0, 0, time.UTC), Message: "older"},
+		},
+		0,
+		5,
+	)
+
+	if !strings.Contains(out, "04-22 23:59  INFO") {
+		t.Fatalf("RenderDashboard() missing non-same-day timestamp fallback in %q", out)
 	}
 }

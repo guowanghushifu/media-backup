@@ -465,7 +465,8 @@ func (s *Service) snapshotUI() ([]ui.JobStatus, []ui.EventRecord, int) {
 		return active[i].Name < active[j].Name
 	})
 	events := make([]ui.EventRecord, 0, len(s.recentEvents))
-	for _, event := range s.recentEvents {
+	for i := len(s.recentEvents) - 1; i >= 0; i-- {
+		event := s.recentEvents[i]
 		events = append(events, ui.EventRecord{At: event.at, Message: event.message})
 	}
 	return active, events, len(s.scheduler.Ready())
