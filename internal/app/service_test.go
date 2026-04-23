@@ -330,7 +330,7 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 		close(scanReturned)
 		return 0, nil
 	}
-	s.scanLinkDir = func(string, []string) (int, error) { return 0, nil }
+	s.scanLinkedFiles = func(string, []string) ([]string, error) { return nil, nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -398,7 +398,12 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	s.addWatches = func(string) error {
 		return nil
 	}
-	s.scanLinkDir = func(string, []string) (int, error) { return 0, nil }
+	s.scanLinkedFiles = func(string, []string) ([]string, error) {
+		return []string{
+			filepath.Join(linkDir, "a.mkv"),
+			filepath.Join(linkDir, "b.mkv"),
+		}, nil
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.scanExisting = func(gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration) (int, error) {
@@ -424,8 +429,55 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	}
 
 	ready := s.scheduler.Ready()
-	if len(ready) != 1 || ready[0] != sourceDir {
-		t.Fatalf("Ready() = %v, want [%s]", ready, sourceDir)
+	if len(ready) != 2 {
+		t.Fatalf("Ready() = %v, want 2 linked-file tasks", ready)
+	}
+}
+
+func TestStartupCatchUpQueuesEachLinkedFileIndividually(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := "/source"
+	linkDir := "/link"
+	job := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    sourceDir,
+		LinkDir:      linkDir,
+		RcloneRemote: "remote:movies",
+	}
+
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Second
+	s.configJobs = map[string]config.JobConfig{
+		sourceDir: job,
+	}
+	s.mkdirAll = func(string, os.FileMode) error { return nil }
+	s.addWatches = func(string) error { return nil }
+	s.scanExisting = func(string, string, []string, time.Duration) (int, error) { return 0, nil }
+	s.scanLinkedFiles = func(string, []string) ([]string, error) {
+		return []string{
+			filepath.Join(linkDir, "movie", "a.mkv"),
+			filepath.Join(linkDir, "movie", "b.mkv"),
+		}, nil
+	}
+
+	if err := s.startupCatchUp(); err != nil {
+		t.Fatalf("startupCatchUp() error = %v", err)
+	}
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 2 {
+		t.Fatalf("len(Ready()) = %d, want 2", len(ready))
+	}
+	want := map[string]struct{}{
+		filepath.Join(linkDir, "movie", "a.mkv"): {},
+		filepath.Join(linkDir, "movie", "b.mkv"): {},
+	}
+	for _, key := range ready {
+		if _, ok := want[key]; !ok {
+			t.Fatalf("Ready() contains unexpected key %q (all=%v)", key, ready)
+		}
 	}
 }
 
@@ -434,12 +486,13 @@ func TestStartupCatchUpMarksJobDirtyWhenLinkDirHasPendingFiles(t *testing.T) {
 
 	job := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link"}
 	s := &Service{
-		cfg:       &config.Config{StableDuration: time.Minute, Extensions: []string{".mkv"}},
-		logger:    log.New(io.Discard, "", 0),
-		scheduler: queue.New(queue.Options{MaxParallel: 1}),
-		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
-		retryDue:  map[string]time.Time{},
-		wakeCh:    make(chan struct{}, 1),
+		cfg:        &config.Config{StableDuration: time.Minute, Extensions: []string{".mkv"}},
+		logger:     log.New(io.Discard, "", 0),
+		scheduler:  queue.New(queue.Options{MaxParallel: 1}),
+		configJobs: map[string]config.JobConfig{job.SourceDir: job},
+		jobs:       map[string]*jobRuntime{},
+		retryDue:   map[string]time.Time{},
+		wakeCh:     make(chan struct{}, 1),
 		now: func() time.Time {
 			return time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC)
 		},
@@ -447,15 +500,17 @@ func TestStartupCatchUpMarksJobDirtyWhenLinkDirHasPendingFiles(t *testing.T) {
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
 	s.scanExisting = func(string, string, []string, time.Duration) (int, error) { return 0, nil }
-	s.scanLinkDir = func(string, []string) (int, error) { return 1, nil }
+	s.scanLinkedFiles = func(string, []string) ([]string, error) {
+		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
+	}
 
 	if err := s.startupCatchUp(); err != nil {
 		t.Fatalf("startupCatchUp() error = %v", err)
 	}
 
 	ready := s.scheduler.Ready()
-	if len(ready) != 1 || ready[0] != job.SourceDir {
-		t.Fatalf("Ready() = %v, want [%s]", ready, job.SourceDir)
+	if len(ready) != 1 || ready[0] != filepath.Join(job.LinkDir, "movie.mkv") {
+		t.Fatalf("Ready() = %v, want linked file key", ready)
 	}
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
@@ -470,10 +525,11 @@ func TestStartupCatchUpRecordsSchedulerEventWhenExistingFilesQueued(t *testing.T
 
 	job := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link"}
 	s := &Service{
-		cfg:       &config.Config{StableDuration: time.Minute},
-		logger:    log.New(io.Discard, "", 0),
-		scheduler: queue.New(queue.Options{MaxParallel: 1}),
-		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
+		cfg:        &config.Config{StableDuration: time.Minute},
+		logger:     log.New(io.Discard, "", 0),
+		scheduler:  queue.New(queue.Options{MaxParallel: 1}),
+		configJobs: map[string]config.JobConfig{job.SourceDir: job},
+		jobs:       map[string]*jobRuntime{},
 		now: func() time.Time {
 			return time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC)
 		},
@@ -481,6 +537,9 @@ func TestStartupCatchUpRecordsSchedulerEventWhenExistingFilesQueued(t *testing.T
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
 	s.scanExisting = func(string, string, []string, time.Duration) (int, error) { return 3, nil }
+	s.scanLinkedFiles = func(string, []string) ([]string, error) {
+		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
+	}
 
 	if err := s.startupCatchUp(); err != nil {
 		t.Fatalf("startupCatchUp() error = %v", err)
@@ -518,14 +577,63 @@ func TestProcessFileRecordsQueueEventOnceForIdleJob(t *testing.T) {
 		},
 	}
 
-	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
-	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
+	s.processFile(context.Background(), job, path)
+	s.processFile(context.Background(), job, path)
 
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
 	if got := s.recentEvents[0].message; got != "[MOVIE] 检测到新文件，任务标记为待上传" {
 		t.Fatalf("recentEvents[0].message = %q, want runtime queue event", got)
+	}
+}
+
+func TestProcessFileQueuesSiblingFilesAsIndependentTasks(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	fileA := filepath.Join(sourceDir, "movie", "a.mkv")
+	fileB := filepath.Join(sourceDir, "movie", "b.mkv")
+	if err := os.MkdirAll(filepath.Dir(fileA), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{fileA, fileB} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	job := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    sourceDir,
+		LinkDir:      linkDir,
+		RcloneRemote: "remote:movies",
+	}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Millisecond
+	s.cfg.PollInterval = time.Millisecond
+	s.configJobs = map[string]config.JobConfig{
+		sourceDir: job,
+	}
+
+	s.processFile(context.Background(), job, fileA)
+	s.processFile(context.Background(), job, fileB)
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 2 {
+		t.Fatalf("len(Ready()) = %d, want 2", len(ready))
+	}
+	want := map[string]struct{}{
+		filepath.Join(linkDir, "movie", "a.mkv"): {},
+		filepath.Join(linkDir, "movie", "b.mkv"): {},
+	}
+	for _, key := range ready {
+		if _, ok := want[key]; !ok {
+			t.Fatalf("Ready() contains unexpected key %q (all=%v)", key, ready)
+		}
 	}
 }
 
@@ -561,7 +669,7 @@ func TestProcessFileRecordsQueueEventWhenDispatchStartsImmediately(t *testing.T)
 		}
 	}
 
-	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
+	s.processFile(context.Background(), job, path)
 
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
@@ -598,14 +706,15 @@ func TestProcessFileDoesNotRecordQueueEventWhilePendingRetry(t *testing.T) {
 		},
 	}
 
-	s.scheduler.MarkDirty(job.SourceDir)
-	if !s.scheduler.TryStart(job.SourceDir) {
+	linkPath := filepath.Join(linkDir, "movie.mkv")
+	s.scheduler.MarkDirty(linkPath)
+	if !s.scheduler.TryStart(linkPath) {
 		t.Fatal("TryStart() = false, want true")
 	}
-	s.scheduler.FinishFailed(job.SourceDir)
-	s.retryDue[job.SourceDir] = s.currentTime().Add(time.Minute)
+	s.scheduler.FinishFailed(linkPath)
+	s.retryDue[linkPath] = s.currentTime().Add(time.Minute)
 
-	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
+	s.processFile(context.Background(), job, path)
 
 	if len(s.recentEvents) != 0 {
 		t.Fatalf("len(recentEvents) = %d, want 0", len(s.recentEvents))
@@ -615,7 +724,7 @@ func TestProcessFileDoesNotRecordQueueEventWhilePendingRetry(t *testing.T) {
 	}
 }
 
-func TestProcessFileRecordsRerunEventOnceForActiveJob(t *testing.T) {
+func TestProcessFileUsesQueueEventForActiveFileTask(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -630,26 +739,26 @@ func TestProcessFileRecordsRerunEventOnceForActiveJob(t *testing.T) {
 	}
 
 	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir}
+	linkPath := filepath.Join(linkDir, "movie.mkv")
 	s := &Service{
 		cfg:       &config.Config{StableDuration: time.Millisecond, PollInterval: time.Millisecond, Extensions: []string{".mkv"}},
 		logger:    log.New(io.Discard, "", 0),
 		scheduler: queue.New(queue.Options{MaxParallel: 1}),
 		jobs: map[string]*jobRuntime{
-			job.SourceDir: {cfg: job, key: job.SourceDir, active: true},
+			linkPath: {cfg: job, key: linkPath, linkPath: linkPath, sourcePath: path, active: true},
 		},
 		now: func() time.Time {
 			return time.Date(2026, 4, 23, 10, 0, 2, 0, time.UTC)
 		},
 	}
 
-	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
-	s.processFile(context.Background(), s.jobs[job.SourceDir], path)
+	s.processFile(context.Background(), job, path)
 
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] 检测到新文件，任务保持运行中，完成后将重新排队" {
-		t.Fatalf("recentEvents[0].message = %q, want rerun event", got)
+	if got := s.recentEvents[0].message; got != "[MOVIE] 检测到新文件，任务标记为待上传" {
+		t.Fatalf("recentEvents[0].message = %q, want queue event", got)
 	}
 }
 
@@ -672,6 +781,39 @@ func TestStartReadyUploadsRecordsDispatchStartEvent(t *testing.T) {
 	}
 	if got := s.recentEvents[0].message; got != "[MOVIE] 调度开始上传" {
 		t.Fatalf("recentEvents[0].message = %q, want dispatch start event", got)
+	}
+}
+
+func TestStartReadyUploadsStartsMultipleSiblingFilesUpToLimit(t *testing.T) {
+	t.Parallel()
+
+	job := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    "/source",
+		LinkDir:      "/link",
+		RcloneRemote: "remote:movies",
+	}
+
+	s := newTestService()
+	s.scheduler = queue.New(queue.Options{MaxParallel: 2})
+	s.jobs = map[string]*jobRuntime{
+		"/link/a.mkv": {cfg: job, key: "/link/a.mkv", sourcePath: "/source/a.mkv", linkPath: "/link/a.mkv", remoteDir: "remote:movies/"},
+		"/link/b.mkv": {cfg: job, key: "/link/b.mkv", sourcePath: "/source/b.mkv", linkPath: "/link/b.mkv", remoteDir: "remote:movies/"},
+		"/link/c.mkv": {cfg: job, key: "/link/c.mkv", sourcePath: "/source/c.mkv", linkPath: "/link/c.mkv", remoteDir: "remote:movies/"},
+	}
+
+	started := make(map[string]struct{})
+	s.startUpload = func(_ context.Context, task *jobRuntime) {
+		started[task.linkPath] = struct{}{}
+	}
+	for _, key := range []string{"/link/a.mkv", "/link/b.mkv", "/link/c.mkv"} {
+		s.scheduler.MarkDirty(key)
+	}
+
+	s.startReadyUploads(context.Background())
+
+	if len(started) != 2 {
+		t.Fatalf("len(started) = %d, want 2", len(started))
 	}
 }
 
@@ -710,7 +852,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		}
 	})
 
-	t.Run("success with dirty reruns", func(t *testing.T) {
+	t.Run("success ignores stale dirty flag", func(t *testing.T) {
 		s, job := makeService(time.Date(2026, 4, 23, 10, 0, 5, 0, time.UTC))
 		job.dirtyDuringRun = true
 
@@ -719,8 +861,8 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		if len(s.recentEvents) != 1 {
 			t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 		}
-		if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，检测到新增文件，重新排队" {
-			t.Fatalf("recentEvents[0].message = %q, want rerun completion event", got)
+		if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，任务清空" {
+			t.Fatalf("recentEvents[0].message = %q, want success event", got)
 		}
 	})
 
@@ -886,13 +1028,15 @@ func TestReleaseRetriesDoesNotRecordEventBeforeDueTime(t *testing.T) {
 
 func newTestService() *Service {
 	return &Service{
-		cfg:       &config.Config{MaxParallelUploads: 5},
-		logger:    log.New(io.Discard, "", 0),
-		scheduler: queue.New(queue.Options{MaxParallel: 5}),
-		jobs:      map[string]*jobRuntime{},
-		retryDue:  map[string]time.Time{},
-		wakeCh:    make(chan struct{}, 1),
-		uiWakeCh:  make(chan struct{}, 1),
+		cfg:             &config.Config{MaxParallelUploads: 5},
+		logger:          log.New(io.Discard, "", 0),
+		scheduler:       queue.New(queue.Options{MaxParallel: 5}),
+		configJobs:      map[string]config.JobConfig{},
+		jobs:            map[string]*jobRuntime{},
+		scanLinkedFiles: func(string, []string) ([]string, error) { return nil, nil },
+		retryDue:        map[string]time.Time{},
+		wakeCh:          make(chan struct{}, 1),
+		uiWakeCh:        make(chan struct{}, 1),
 	}
 }
 
