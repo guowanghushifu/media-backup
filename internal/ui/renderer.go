@@ -11,7 +11,8 @@ const (
 	activeJobProgressWidth = 8
 	activeJobSpeedWidth    = 16
 	activeJobETAWidth      = 12
-	minBodyRows            = 5
+	minActiveJobRows       = 10
+	minEventRows           = 10
 	minDashboardWidth      = 9
 )
 
@@ -51,9 +52,9 @@ func RenderDashboardWithWidth(now time.Time, active []JobStatus, events []EventR
 
 	lines := renderPanel(summaryTitle, summaryBody, innerPanelWidth, 1)
 	lines = append(lines, "")
-	lines = append(lines, renderPanel(jobsTitle, jobsBody, innerPanelWidth, minBodyRows)...)
+	lines = append(lines, renderPanel(jobsTitle, jobsBody, innerPanelWidth, minActiveJobRows)...)
 	lines = append(lines, "")
-	lines = append(lines, renderPanel(eventsTitle, eventsBody, innerPanelWidth, minBodyRows)...)
+	lines = append(lines, renderPanel(eventsTitle, eventsBody, innerPanelWidth, minEventRows)...)
 
 	return strings.Join(outerFrame(lines, totalWidth), "\n")
 }
