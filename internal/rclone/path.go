@@ -1,14 +1,23 @@
 package rclone
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 )
 
+var errSourceFileOutsideSourceDir = errors.New("source file is outside source dir")
+
 func BuildRemoteDir(sourceDir, remoteRoot, sourceFile string) (string, error) {
-	rel, err := filepath.Rel(sourceDir, sourceFile)
+	cleanSourceDir := filepath.Clean(sourceDir)
+	cleanSourceFile := filepath.Clean(sourceFile)
+
+	rel, err := filepath.Rel(cleanSourceDir, cleanSourceFile)
 	if err != nil {
 		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errSourceFileOutsideSourceDir
 	}
 
 	relDir := filepath.Dir(rel)

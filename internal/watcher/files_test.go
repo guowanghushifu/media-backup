@@ -163,6 +163,32 @@ func TestCleanupLinkedFileRemovesOnlyUploadedFileAndEmptyParents(t *testing.T) {
 	}
 }
 
+func TestCleanupLinkedFileRejectsPathOutsideLinkDirWithoutDeleting(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	linkDir := filepath.Join(root, "links")
+	externalDir := filepath.Join(root, "external")
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll link dir: %v", err)
+	}
+	if err := os.MkdirAll(externalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll external dir: %v", err)
+	}
+	externalFile := filepath.Join(externalDir, "episode-1.mkv")
+	if err := os.WriteFile(externalFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile external: %v", err)
+	}
+
+	if err := CleanupLinkedFile(linkDir, externalFile); err == nil {
+		t.Fatal("CleanupLinkedFile() error = nil, want non-nil for outside path")
+	}
+
+	if _, err := os.Stat(externalFile); err != nil {
+		t.Fatalf("external file was deleted unexpectedly: %v", err)
+	}
+}
+
 func TestWaitStableReturnsAfterSizeStopsChanging(t *testing.T) {
 	t.Parallel()
 

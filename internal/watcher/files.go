@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+var errLinkFileOutsideLinkDir = errors.New("link file is outside link dir")
+
 func LinkFile(sourceDir, linkDir, sourceFile string) (string, error) {
 	rel, err := filepath.Rel(sourceDir, sourceFile)
 	if err != nil {
@@ -40,12 +42,22 @@ func CleanupLinkDir(linkDir string) error {
 }
 
 func CleanupLinkedFile(linkDir, linkFile string) error {
-	if err := os.Remove(linkFile); err != nil {
+	cleanRoot := filepath.Clean(linkDir)
+	cleanFile := filepath.Clean(linkFile)
+
+	rel, err := filepath.Rel(cleanRoot, cleanFile)
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errLinkFileOutsideLinkDir
+	}
+
+	if err := os.Remove(cleanFile); err != nil {
 		return err
 	}
 
-	cleanRoot := filepath.Clean(linkDir)
-	current := filepath.Dir(linkFile)
+	current := filepath.Dir(cleanFile)
 	for {
 		cleanCurrent := filepath.Clean(current)
 		if cleanCurrent == cleanRoot {

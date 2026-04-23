@@ -38,3 +38,15 @@ func TestBuildRemoteDirKeepsRootRemoteForTopLevelFile(t *testing.T) {
 		t.Fatalf("BuildRemoteDir() = %q, want %q", got, want)
 	}
 }
+
+func TestBuildRemoteDirRejectsSourceFileOutsideSourceDir(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := filepath.Join(string(filepath.Separator), "library")
+	sourceFile := filepath.Join(string(filepath.Separator), "other", "feature.mkv")
+
+	_, err := BuildRemoteDir(sourceDir, "gd1:/sync", sourceFile)
+	if err == nil {
+		t.Fatal("BuildRemoteDir() error = nil, want non-nil for outside source path")
+	}
+}
