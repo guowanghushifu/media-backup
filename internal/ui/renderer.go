@@ -12,7 +12,7 @@ const (
 	activeJobSpeedWidth    = 12
 	activeJobETAWidth      = 12
 	minBodyRows            = 5
-	minDashboardWidth      = 60
+	minDashboardWidth      = 9
 )
 
 type JobStatus struct {
@@ -44,15 +44,8 @@ func RenderDashboardWithWidth(now time.Time, active []JobStatus, events []EventR
 	}
 
 	innerPanelWidth := totalWidth - 4
-	minInnerPanelWidth := panelTotalWidth(summaryTitle, summaryBody)
-	if panelWidth := panelTotalWidth(jobsTitle, jobsBody); panelWidth > minInnerPanelWidth {
-		minInnerPanelWidth = panelWidth
-	}
-	if panelWidth := panelTotalWidth(eventsTitle, eventsBody); panelWidth > minInnerPanelWidth {
-		minInnerPanelWidth = panelWidth
-	}
-	if innerPanelWidth < minInnerPanelWidth {
-		innerPanelWidth = minInnerPanelWidth
+	if innerPanelWidth < 5 {
+		innerPanelWidth = 5
 		totalWidth = innerPanelWidth + 4
 	}
 

@@ -520,6 +520,48 @@ func TestRenderDashboardShowsMonthDayTimeForOlderEvents(t *testing.T) {
 	}
 }
 
+func TestRenderDashboardTruncatesLongEventToRequestedWidth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 10, 54, 30, 0, time.UTC)
+	out := ui.RenderDashboardWithWidth(
+		now,
+		nil,
+		[]ui.EventRecord{
+			{
+				At:      time.Date(2026, 4, 23, 10, 54, 20, 0, time.UTC),
+				Message: "琅琊榜 (2015) {tmdb-64197}/S01/琅琊榜 S01E03 - 2160p.WEB-DL.H265.AAC-HHWEB.mp4: Copied (new)",
+			},
+		},
+		0,
+		5,
+		50,
+	)
+
+	var eventLine string
+	for _, line := range strings.Split(out, "\n") {
+		if got := displayWidth(line); got > 50 {
+			t.Fatalf("RenderDashboardWithWidth() line width = %d, want <= 50 in %q", got, line)
+		}
+		if strings.Contains(line, "10:54:20") {
+			eventLine = line
+		}
+	}
+
+	if eventLine == "" {
+		t.Fatalf("RenderDashboardWithWidth() missing long event line in %q", out)
+	}
+	if !strings.Contains(eventLine, "...") {
+		t.Fatalf("RenderDashboardWithWidth() event line was not truncated: %q", eventLine)
+	}
+	if !strings.Contains(eventLine, "琅琊榜") {
+		t.Fatalf("RenderDashboardWithWidth() event line lost leading event text: %q", eventLine)
+	}
+	if strings.Contains(eventLine, "Copied (new)") {
+		t.Fatalf("RenderDashboardWithWidth() event line kept full tail instead of truncating: %q", eventLine)
+	}
+}
+
 func columnStarts(line string) []int {
 	starts := []int{0}
 	width := 0
@@ -558,4 +600,37 @@ func columnStarts(line string) []int {
 	}
 
 	return starts
+}
+
+func displayWidth(text string) int {
+	width := 0
+	for len(text) > 0 {
+		r, size := utf8.DecodeRuneInString(text)
+		text = text[size:]
+
+		switch {
+		case r == 0:
+			continue
+		case r >= 0x0300 && r <= 0x036f:
+			continue
+		case r >= 0x1100 && (r <= 0x115f ||
+			r == 0x2329 ||
+			r == 0x232a ||
+			(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
+			(r >= 0xac00 && r <= 0xd7a3) ||
+			(r >= 0xf900 && r <= 0xfaff) ||
+			(r >= 0xfe10 && r <= 0xfe19) ||
+			(r >= 0xfe30 && r <= 0xfe6f) ||
+			(r >= 0xff00 && r <= 0xff60) ||
+			(r >= 0xffe0 && r <= 0xffe6) ||
+			(r >= 0x1f300 && r <= 0x1f64f) ||
+			(r >= 0x1f900 && r <= 0x1f9ff) ||
+			(r >= 0x20000 && r <= 0x3fffd)):
+			width += 2
+		default:
+			width++
+		}
+	}
+
+	return width
 }

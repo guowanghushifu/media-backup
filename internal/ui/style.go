@@ -23,8 +23,8 @@ func panel(title string, body []string) []string {
 }
 
 func renderPanel(title string, body []string, totalWidth int, minBodyRows int) []string {
-	if minWidth := panelTotalWidth(title, body); totalWidth < minWidth {
-		totalWidth = minWidth
+	if totalWidth < 5 {
+		totalWidth = 5
 	}
 
 	bodyWidth := totalWidth - 4
@@ -33,14 +33,22 @@ func renderPanel(title string, body []string, totalWidth int, minBodyRows int) [
 		linesBody = append(linesBody, "")
 	}
 
-	titleWidth := displayWidth(title)
+	maxTitleWidth := totalWidth - 5
+	displayTitle := title
+	if maxTitleWidth <= 0 {
+		displayTitle = ""
+	} else if displayWidth(title) > maxTitleWidth {
+		displayTitle = trimDisplay(title, maxTitleWidth)
+	}
+
+	titleWidth := displayWidth(displayTitle)
 	topFill := totalWidth - titleWidth - 5
 	if topFill < 0 {
 		topFill = 0
 	}
 
 	lines := []string{
-		"┌─ " + title + " " + strings.Repeat("─", topFill) + "┐",
+		"┌─ " + displayTitle + " " + strings.Repeat("─", topFill) + "┐",
 	}
 	for _, line := range linesBody {
 		lines = append(lines, "│ "+padOrTrimDisplay(line, bodyWidth)+" │")
@@ -136,8 +144,7 @@ func displayWidth(text string) int {
 }
 
 func isWideRune(r rune) bool {
-	return r >= 0x1100 && (
-		r <= 0x115f ||
+	return r >= 0x1100 && (r <= 0x115f ||
 		r == 0x2329 ||
 		r == 0x232a ||
 		(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
