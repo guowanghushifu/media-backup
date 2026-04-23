@@ -43,6 +43,7 @@ type Service struct {
 	uiWidth           func() int
 
 	mu           sync.Mutex
+	completionMu sync.Mutex
 	configJobs   map[string]config.JobConfig
 	jobs         map[string]*jobRuntime
 	processing   map[string]struct{}
@@ -291,22 +292,11 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 		s.logger.Printf("wait stable %s: %v", path, err)
 		return
 	}
-	linkPath, err := watcher.LinkFile(cfgJob.SourceDir, cfgJob.LinkDir, path)
+	task, wasQueued, wasPendingRetry, err := s.linkAndQueueTask(cfgJob, path)
 	if err != nil {
-		s.logger.Printf("link file %s: %v", path, err)
+		s.logger.Printf("queue task %s: %v", path, err)
 		return
 	}
-
-	task, err := s.registerTask(cfgJob, path, linkPath)
-	if err != nil {
-		s.logger.Printf("register task %s: %v", path, err)
-		return
-	}
-
-	wasQueued := s.isJobReady(task.key)
-	wasPendingRetry := s.isRetryWaiting(task.key)
-	s.scheduler.MarkDirty(task.key)
-	s.runAfterMarkDirty(task.key)
 	if !wasQueued && !wasPendingRetry {
 		s.appendSchedulerEventNow(task, "检测到新文件，任务标记为待上传")
 	}
@@ -314,21 +304,31 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 }
 
 func (s *Service) registerTask(cfgJob config.JobConfig, sourcePath, linkPath string) (*jobRuntime, error) {
-	remoteDir, err := rclone.BuildRemoteDir(cfgJob.SourceDir, cfgJob.RcloneRemote, sourcePath)
+	s.completionMu.Lock()
+	defer s.completionMu.Unlock()
+
+	task, _, _, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
 	if err != nil {
 		return nil, err
+	}
+	return task, nil
+}
+
+func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPath string) (*jobRuntime, bool, bool, error) {
+	remoteDir, err := rclone.BuildRemoteDir(cfgJob.SourceDir, cfgJob.RcloneRemote, sourcePath)
+	if err != nil {
+		return nil, false, false, err
 	}
 	ready := s.isJobReady(linkPath)
 	pendingRetry := s.isRetryWaiting(linkPath)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.jobs == nil {
 		s.jobs = map[string]*jobRuntime{}
 	}
 	task := s.jobs[linkPath]
-	if task == nil || task.active || (!ready && !pendingRetry) {
+	clearRetryWait := pendingRetry && (task == nil || task.sourcePath != sourcePath)
+	if task == nil || task.active || (!ready && !pendingRetry) || clearRetryWait {
 		task = &jobRuntime{}
 		s.jobs[linkPath] = task
 	}
@@ -337,7 +337,15 @@ func (s *Service) registerTask(cfgJob config.JobConfig, sourcePath, linkPath str
 	task.sourcePath = sourcePath
 	task.linkPath = linkPath
 	task.remoteDir = remoteDir
-	return task, nil
+	if clearRetryWait {
+		delete(s.retryDue, linkPath)
+	}
+	s.mu.Unlock()
+
+	if clearRetryWait {
+		s.scheduler.RetryJob(linkPath)
+	}
+	return task, ready, pendingRetry, nil
 }
 
 func (s *Service) registerTaskByLinkPath(cfgJob config.JobConfig, linkPath string) (*jobRuntime, error) {
@@ -346,6 +354,23 @@ func (s *Service) registerTaskByLinkPath(cfgJob config.JobConfig, linkPath strin
 		return nil, err
 	}
 	return s.registerTask(cfgJob, sourcePath, linkPath)
+}
+
+func (s *Service) linkAndQueueTask(cfgJob config.JobConfig, sourcePath string) (*jobRuntime, bool, bool, error) {
+	s.completionMu.Lock()
+	defer s.completionMu.Unlock()
+
+	linkPath, err := watcher.LinkFile(cfgJob.SourceDir, cfgJob.LinkDir, sourcePath)
+	if err != nil {
+		return nil, false, false, err
+	}
+	task, wasQueued, wasPendingRetry, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
+	if err != nil {
+		return nil, false, false, err
+	}
+	s.scheduler.MarkDirty(task.key)
+	s.runAfterMarkDirty(task.key)
+	return task, wasQueued, wasPendingRetry, nil
 }
 
 func (s *Service) taskForKey(key string) *jobRuntime {
@@ -468,6 +493,9 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 		return
 	}
 
+	s.completionMu.Lock()
+	defer s.completionMu.Unlock()
+
 	s.mu.Lock()
 	job.active = false
 	job.summary = "上传完成"
@@ -475,40 +503,47 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 
 	if identityErr != nil {
 		s.logger.Printf("stat linked file %s before upload: %v; skipping cleanup", job.linkPath, identityErr)
-		s.finishUploadSuccess(job)
+		s.finishUploadSuccessLocked(job)
 		return
 	}
 
 	sameLinkedFile, err := linkedFileMatchesIdentity(uploadedLinkIdentity, job.linkPath)
 	if err != nil {
 		s.logger.Printf("check linked file identity %s: %v", job.linkPath, err)
-		s.finishUploadFailure(job, fmt.Sprintf("清理失败: %v", err))
+		s.finishUploadFailureLocked(job, fmt.Sprintf("清理失败: %v", err))
 		return
 	}
 	if !sameLinkedFile {
-		s.finishUploadSuccess(job)
+		s.finishUploadSuccessLocked(job)
 		return
 	}
 	if current := s.taskForKey(job.key); current != nil && current != job {
-		s.finishUploadSuccess(job)
+		s.finishUploadSuccessLocked(job)
 		return
 	}
 
 	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
 		if missing, statErr := linkedFileMissing(job.linkPath); statErr == nil && missing {
 			s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
-			s.finishUploadSuccess(job)
+			s.finishUploadSuccessLocked(job)
 			return
 		}
 		s.logger.Printf("cleanup linked file %s (root %s): %v", job.linkPath, job.cfg.LinkDir, err)
-		s.finishUploadFailure(job, fmt.Sprintf("清理失败: %v", err))
+		s.finishUploadFailureLocked(job, fmt.Sprintf("清理失败: %v", err))
 		return
 	}
 
-	s.finishUploadSuccess(job)
+	s.finishUploadSuccessLocked(job)
 }
 
 func (s *Service) finishUploadFailure(job *jobRuntime, summary string) {
+	s.completionMu.Lock()
+	defer s.completionMu.Unlock()
+
+	s.finishUploadFailureLocked(job, summary)
+}
+
+func (s *Service) finishUploadFailureLocked(job *jobRuntime, summary string) {
 	if job == nil {
 		return
 	}
@@ -535,6 +570,13 @@ func (s *Service) finishUploadFailure(job *jobRuntime, summary string) {
 }
 
 func (s *Service) finishUploadSuccess(job *jobRuntime) {
+	s.completionMu.Lock()
+	defer s.completionMu.Unlock()
+
+	s.finishUploadSuccessLocked(job)
+}
+
+func (s *Service) finishUploadSuccessLocked(job *jobRuntime) {
 	s.scheduler.Finish(job.key, false)
 	message := "上传完成，已有新任务"
 	if s.removeTaskIfCompleted(job) {
