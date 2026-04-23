@@ -844,6 +844,10 @@ func (s *Service) appendSchedulerEvent(at time.Time, job *jobRuntime, message st
 	if job == nil {
 		return
 	}
+	if name := filepath.Base(job.linkPath); name != "" && name != "." {
+		s.appendRecentEvent(at, fmt.Sprintf("[%s] %s｜%s", job.cfg.Name, name, message))
+		return
+	}
 	s.appendRecentEvent(at, fmt.Sprintf("[%s] %s", job.cfg.Name, message))
 }
 

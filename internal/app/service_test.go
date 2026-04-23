@@ -700,7 +700,7 @@ func TestProcessFileRecordsQueueEventOnceForIdleJob(t *testing.T) {
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] 检测到新文件，任务标记为待上传" {
+	if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜检测到新文件，任务标记为待上传" {
 		t.Fatalf("recentEvents[0].message = %q, want runtime queue event", got)
 	}
 }
@@ -794,7 +794,7 @@ func TestProcessFileRecordsQueueEventWhenDispatchStartsImmediately(t *testing.T)
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] 检测到新文件，任务标记为待上传" {
+	if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜检测到新文件，任务标记为待上传" {
 		t.Fatalf("recentEvents[0].message = %q, want runtime queue event even if dispatch wins race", got)
 	}
 }
@@ -885,7 +885,7 @@ func TestProcessFileUsesSupersedeEventForActiveFileTask(t *testing.T) {
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] 检测到同路径文件更新，已取消旧上传并重新排队" {
+	if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜检测到同路径文件更新，已取消旧上传并重新排队" {
 		t.Fatalf("recentEvents[0].message = %q, want supersede event", got)
 	}
 }
@@ -914,7 +914,7 @@ func TestStartReadyUploadsRecordsDispatchStartEvent(t *testing.T) {
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] 调度开始上传" {
+	if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜调度开始上传" {
 		t.Fatalf("recentEvents[0].message = %q, want dispatch start event", got)
 	}
 }
@@ -1106,7 +1106,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		if len(s.recentEvents) != 1 {
 			t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 		}
-		if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，任务清空" {
+		if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜上传完成，任务清空" {
 			t.Fatalf("recentEvents[0].message = %q, want success event", got)
 		}
 		if _, ok := s.jobs[job.key]; ok {
@@ -1129,7 +1129,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		if len(s.recentEvents) != 1 {
 			t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 		}
-		if got := s.recentEvents[0].message; got != "[MOVIE] 上传失败，进入重试等待" {
+		if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜上传失败，进入重试等待" {
 			t.Fatalf("recentEvents[0].message = %q, want failure event", got)
 		}
 		if _, ok := s.retryDue[job.linkPath]; !ok {
@@ -1164,7 +1164,7 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		if len(s.recentEvents) != 1 {
 			t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 		}
-		if got := s.recentEvents[0].message; got != "[MOVIE] 上传失败，进入重试等待" {
+		if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜上传失败，进入重试等待" {
 			t.Fatalf("recentEvents[0].message = %q, want cleanup failure retry event", got)
 		}
 		if _, ok := s.retryDue[job.linkPath]; !ok {
@@ -1221,7 +1221,7 @@ func TestRunUploadTreatsPostDeleteCleanupErrorAsSuccess(t *testing.T) {
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，任务清空" {
+	if got := s.recentEvents[0].message; got != "[MOVIE] episode 1.mkv｜上传完成，任务清空" {
 		t.Fatalf("recentEvents[0].message = %q, want success event after post-delete cleanup error", got)
 	}
 	if _, ok := s.retryDue[job.key]; ok {
@@ -1753,7 +1753,7 @@ func TestReleaseRetriesRecordsRequeueEvent(t *testing.T) {
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] 到达重试时间，重新排队" {
+	if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜到达重试时间，重新排队" {
 		t.Fatalf("recentEvents[0].message = %q, want retry requeue event", got)
 	}
 }
