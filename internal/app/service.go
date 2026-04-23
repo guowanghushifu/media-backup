@@ -491,6 +491,10 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 		s.finishUploadSuccess(job)
 		return
 	}
+	if current := s.taskForKey(job.key); current != nil && current != job {
+		s.finishUploadSuccess(job)
+		return
+	}
 
 	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
 		if missing, statErr := linkedFileMissing(job.linkPath); statErr == nil && missing {
