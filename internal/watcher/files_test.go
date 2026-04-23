@@ -86,6 +86,57 @@ func TestLinkFileIsIdempotentWhenTargetExists(t *testing.T) {
 	}
 }
 
+func TestLinkFileReplacesStaleLinkWhenSourcePathGetsNewInode(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := t.TempDir()
+	linkDir := t.TempDir()
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.WriteFile(sourcePath, []byte("old-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile original source: %v", err)
+	}
+
+	linkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("first LinkFile() error = %v", err)
+	}
+
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatalf("Remove original source: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("new-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile replacement source: %v", err)
+	}
+
+	relinkedPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("second LinkFile() error = %v", err)
+	}
+	if relinkedPath != linkPath {
+		t.Fatalf("second LinkFile() path = %q, want %q", relinkedPath, linkPath)
+	}
+
+	gotBytes, err := os.ReadFile(linkPath)
+	if err != nil {
+		t.Fatalf("ReadFile link: %v", err)
+	}
+	if string(gotBytes) != "new-bytes" {
+		t.Fatalf("linked file content = %q, want %q", string(gotBytes), "new-bytes")
+	}
+
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("Stat replacement source: %v", err)
+	}
+	linkInfo, err := os.Stat(linkPath)
+	if err != nil {
+		t.Fatalf("Stat relinked path: %v", err)
+	}
+	if !os.SameFile(sourceInfo, linkInfo) {
+		t.Fatal("relinked target is not a hard link to replacement source")
+	}
+}
+
 func TestCleanupLinkDirPreservesRoot(t *testing.T) {
 	t.Parallel()
 

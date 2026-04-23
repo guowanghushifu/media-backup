@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,11 +22,61 @@ func LinkFile(sourceDir, linkDir, sourceFile string) (string, error) {
 	}
 	if err := os.Link(sourceFile, linkPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
+			same, err := sameFile(sourceFile, linkPath)
+			if err != nil {
+				return "", err
+			}
+			if same {
+				return linkPath, nil
+			}
+			if err := replaceHardLink(sourceFile, linkPath); err != nil {
+				return "", err
+			}
 			return linkPath, nil
 		}
 		return "", err
 	}
 	return linkPath, nil
+}
+
+func sameFile(sourceFile, targetPath string) (bool, error) {
+	sourceInfo, err := os.Stat(sourceFile)
+	if err != nil {
+		return false, err
+	}
+
+	targetInfo, err := os.Stat(targetPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return os.SameFile(sourceInfo, targetInfo), nil
+}
+
+func replaceHardLink(sourceFile, targetPath string) error {
+	dir := filepath.Dir(targetPath)
+	base := filepath.Base(targetPath)
+
+	for attempt := 0; attempt < 10; attempt++ {
+		tmpPath := filepath.Join(dir, "."+base+".tmp."+strconv.FormatInt(time.Now().UnixNano(), 36)+"."+strconv.Itoa(attempt))
+		if err := os.Link(sourceFile, tmpPath); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return err
+		}
+
+		if err := os.Rename(tmpPath, targetPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		return nil
+	}
+
+	return os.ErrExist
 }
 
 func CleanupLinkDir(linkDir string) error {
