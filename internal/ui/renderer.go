@@ -68,7 +68,7 @@ func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel
 	}
 
 	return "系统状态", []string{
-		fmt.Sprintf("%s %s  活动 %d/%d  排队 %d  更新 %s",
+		fmt.Sprintf("%s %s ｜ 活动 %d/%d ｜ 排队 %d ｜ 更新 %s",
 			"状态",
 			state,
 			activeCount,
