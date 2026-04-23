@@ -26,7 +26,7 @@ func BuildRemoteDir(sourceDir, remoteRoot, sourceFile string) (string, error) {
 	}
 
 	remoteDir := joinRemotePath(remoteRoot, filepath.ToSlash(relDir))
-	if !strings.HasSuffix(remoteDir, "/") {
+	if !strings.HasSuffix(remoteDir, "/") && !isBareRemoteRoot(remoteDir) {
 		remoteDir += "/"
 	}
 	return remoteDir, nil
@@ -42,5 +42,12 @@ func joinRemotePath(remoteRoot, suffix string) string {
 	if cleanRoot == "" {
 		return cleanSuffix
 	}
+	if isBareRemoteRoot(cleanRoot) {
+		return cleanRoot + cleanSuffix
+	}
 	return cleanRoot + "/" + cleanSuffix
+}
+
+func isBareRemoteRoot(remote string) bool {
+	return strings.HasSuffix(remote, ":")
 }

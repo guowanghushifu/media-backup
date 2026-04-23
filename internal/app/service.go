@@ -312,6 +312,8 @@ func (s *Service) registerTask(cfgJob config.JobConfig, sourcePath, linkPath str
 	if err != nil {
 		return nil, err
 	}
+	ready := s.isJobReady(linkPath)
+	pendingRetry := s.isRetryWaiting(linkPath)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -320,7 +322,7 @@ func (s *Service) registerTask(cfgJob config.JobConfig, sourcePath, linkPath str
 		s.jobs = map[string]*jobRuntime{}
 	}
 	task := s.jobs[linkPath]
-	if task == nil || task.active {
+	if task == nil || task.active || (!ready && !pendingRetry) {
 		task = &jobRuntime{}
 		s.jobs[linkPath] = task
 	}
@@ -513,7 +515,7 @@ func (s *Service) logRcloneCommand(job *jobRuntime) {
 }
 
 func remoteDirWithTrailingSlash(remoteDir string) string {
-	if remoteDir == "" || strings.HasSuffix(remoteDir, "/") {
+	if remoteDir == "" || strings.HasSuffix(remoteDir, "/") || strings.HasSuffix(remoteDir, ":") {
 		return remoteDir
 	}
 	return remoteDir + "/"

@@ -39,6 +39,40 @@ func TestBuildRemoteDirKeepsRootRemoteForTopLevelFile(t *testing.T) {
 	}
 }
 
+func TestBuildRemoteDirKeepsBareRootRemoteForTopLevelFile(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := filepath.Join(string(filepath.Separator), "library")
+	sourceFile := filepath.Join(sourceDir, "feature.mkv")
+
+	got, err := BuildRemoteDir(sourceDir, "remote:", sourceFile)
+	if err != nil {
+		t.Fatalf("BuildRemoteDir() error = %v", err)
+	}
+
+	want := "remote:"
+	if got != want {
+		t.Fatalf("BuildRemoteDir() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildRemoteDirKeepsBareRootRemoteForNestedFile(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := filepath.Join(string(filepath.Separator), "library")
+	sourceFile := filepath.Join(sourceDir, "Movie", "Collection", "feature.mkv")
+
+	got, err := BuildRemoteDir(sourceDir, "remote:", sourceFile)
+	if err != nil {
+		t.Fatalf("BuildRemoteDir() error = %v", err)
+	}
+
+	want := "remote:Movie/Collection/"
+	if got != want {
+		t.Fatalf("BuildRemoteDir() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildRemoteDirRejectsSourceFileOutsideSourceDir(t *testing.T) {
 	t.Parallel()
 

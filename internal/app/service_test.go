@@ -952,6 +952,68 @@ func TestRegisterTaskRefreshKeepsNewFileTaskWhenOldUploadCompletes(t *testing.T)
 	}
 }
 
+func TestRegisterTaskSamePathReplacementSurvivesSuccessTailCleanup(t *testing.T) {
+	t.Parallel()
+
+	cfgJob := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    "/source",
+		LinkDir:      "/link",
+		RcloneRemote: "remote:movie",
+	}
+	linkPath := "/link/movie.mkv"
+	oldTask := &jobRuntime{
+		cfg:        cfgJob,
+		key:        linkPath,
+		sourcePath: "/source/movie-old.mkv",
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+		summary:    "上传完成",
+	}
+
+	s := newTestService()
+	s.jobs[linkPath] = oldTask
+
+	replacementTask, err := s.registerTask(cfgJob, "/source/movie-new.mkv", linkPath)
+	if err != nil {
+		t.Fatalf("registerTask() error = %v", err)
+	}
+
+	s.removeTaskIfCompleted(oldTask)
+
+	current := s.taskForKey(linkPath)
+	if current == nil {
+		t.Fatal("taskForKey() = nil, want replacement task retained before requeue")
+	}
+	if current != replacementTask {
+		t.Fatalf("taskForKey() = %#v, want replacement task %#v", current, replacementTask)
+	}
+	if current == oldTask {
+		t.Fatalf("taskForKey() reused completed task %#v, want fresh replacement task", oldTask)
+	}
+
+	started := make(chan *jobRuntime, 1)
+	s.startUpload = func(_ context.Context, job *jobRuntime) {
+		started <- job
+	}
+
+	s.scheduler.MarkDirty(replacementTask.key)
+	s.startReadyUploads(context.Background())
+
+	select {
+	case got := <-started:
+		if got != replacementTask {
+			t.Fatalf("startUpload() job = %#v, want replacement task %#v", got, replacementTask)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startUpload() not called, want replacement task to remain uploadable")
+	}
+
+	if got, want := replacementTask.sourcePath, "/source/movie-new.mkv"; got != want {
+		t.Fatalf("replacementTask.sourcePath = %q, want %q", got, want)
+	}
+}
+
 func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 	t.Parallel()
 
@@ -1380,6 +1442,14 @@ func TestCopyWithRcloneUsesLinkedFileAndRemoteDir(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("captured args = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestRemoteDirWithTrailingSlashPreservesBareRemoteRoot(t *testing.T) {
+	t.Parallel()
+
+	if got, want := remoteDirWithTrailingSlash("remote:"), "remote:"; got != want {
+		t.Fatalf("remoteDirWithTrailingSlash() = %q, want %q", got, want)
 	}
 }
 
