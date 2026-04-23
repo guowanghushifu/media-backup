@@ -362,23 +362,28 @@ func (s *Service) activateTaskForUpload(key string) *jobRuntime {
 	return job
 }
 
-func (s *Service) removeTaskIfCompleted(job *jobRuntime) {
+func (s *Service) removeTaskIfCompleted(job *jobRuntime) bool {
 	if job == nil {
-		return
+		return false
 	}
 	if !s.scheduler.Forget(job.key) {
-		return
+		return false
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	current := s.jobs[job.key]
-	if current == nil || current != job || current.active {
-		return
+	if current == nil {
+		delete(s.retryDue, job.key)
+		return true
+	}
+	if current != job || current.active {
+		return false
 	}
 	delete(s.jobs, job.key)
 	delete(s.retryDue, job.key)
+	return true
 }
 
 func sourcePathFromLinkedPath(sourceDir, linkDir, linkPath string) (string, error) {
@@ -453,14 +458,7 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	uploadedLinkIdentity, identityErr := linkedFileIdentity(job.linkPath)
 	err := s.copyJob(ctx, job)
 	if err != nil {
-		s.mu.Lock()
-		job.active = false
-		job.summary = fmt.Sprintf("上传失败: %v", err)
-		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
-		s.mu.Unlock()
-		s.scheduler.FinishFailed(job.key)
-		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
-		s.signalWake()
+		s.finishUploadFailure(job, fmt.Sprintf("上传失败: %v", err))
 		return
 	}
 
@@ -478,13 +476,7 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	sameLinkedFile, err := linkedFileMatchesIdentity(uploadedLinkIdentity, job.linkPath)
 	if err != nil {
 		s.logger.Printf("check linked file identity %s: %v", job.linkPath, err)
-		s.mu.Lock()
-		job.summary = fmt.Sprintf("清理失败: %v", err)
-		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
-		s.mu.Unlock()
-		s.scheduler.FinishFailed(job.key)
-		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
-		s.signalWake()
+		s.finishUploadFailure(job, fmt.Sprintf("清理失败: %v", err))
 		return
 	}
 	if !sameLinkedFile {
@@ -503,23 +495,46 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 			return
 		}
 		s.logger.Printf("cleanup linked file %s (root %s): %v", job.linkPath, job.cfg.LinkDir, err)
-		s.mu.Lock()
-		job.summary = fmt.Sprintf("清理失败: %v", err)
-		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
-		s.mu.Unlock()
-		s.scheduler.FinishFailed(job.key)
-		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
-		s.signalWake()
+		s.finishUploadFailure(job, fmt.Sprintf("清理失败: %v", err))
 		return
 	}
 
 	s.finishUploadSuccess(job)
 }
 
+func (s *Service) finishUploadFailure(job *jobRuntime, summary string) {
+	if job == nil {
+		return
+	}
+
+	s.mu.Lock()
+	job.active = false
+	job.summary = summary
+	current := s.jobs[job.key]
+	if current == job {
+		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
+	}
+	s.mu.Unlock()
+
+	if current == job {
+		s.scheduler.FinishFailed(job.key)
+		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
+	} else if current != nil {
+		s.scheduler.Finish(job.key, true)
+		s.appendSchedulerEventNow(job, "上传失败，已有新任务")
+	} else {
+		s.scheduler.Finish(job.key, false)
+	}
+	s.signalWake()
+}
+
 func (s *Service) finishUploadSuccess(job *jobRuntime) {
 	s.scheduler.Finish(job.key, false)
-	s.removeTaskIfCompleted(job)
-	s.appendSchedulerEventNow(job, "上传完成，任务清空")
+	message := "上传完成，已有新任务"
+	if s.removeTaskIfCompleted(job) {
+		message = "上传完成，任务清空"
+	}
+	s.appendSchedulerEventNow(job, message)
 	s.signalWake()
 }
 

@@ -1502,6 +1502,99 @@ func TestRunUploadInPlaceSamePathUpdatePreservesReplacementLink(t *testing.T) {
 	}
 }
 
+func TestRunUploadSamePathReplacementReportsRetainedWorkOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	cfgJob := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    "/source",
+		LinkDir:      "/link",
+		RcloneRemote: "remote:movie",
+	}
+	linkPath := "/link/movie.mkv"
+
+	s := newTestService()
+	s.now = func() time.Time { return time.Date(2026, 4, 23, 11, 30, 0, 0, time.UTC) }
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.cleanupLinkedFile = func(string, string) error { return nil }
+
+	oldTask, err := s.registerTask(cfgJob, "/source/movie-old.mkv", linkPath)
+	if err != nil {
+		t.Fatalf("registerTask() error = %v", err)
+	}
+	s.scheduler.MarkDirty(oldTask.key)
+	if !s.scheduler.TryStart(oldTask.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+	oldTask.active = true
+
+	replacementTask, err := s.registerTask(cfgJob, "/source/movie-new.mkv", linkPath)
+	if err != nil {
+		t.Fatalf("registerTask() error = %v", err)
+	}
+	s.scheduler.MarkDirty(replacementTask.key)
+
+	s.runUpload(context.Background(), oldTask)
+
+	if current := s.taskForKey(linkPath); current != replacementTask {
+		t.Fatalf("taskForKey() = %#v, want replacement task %#v", current, replacementTask)
+	}
+	if len(s.recentEvents) != 1 {
+		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
+	}
+	if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，已有新任务" {
+		t.Fatalf("recentEvents[0].message = %q, want retained-work success event", got)
+	}
+	if ready := s.scheduler.Ready(); len(ready) != 1 || ready[0] != linkPath {
+		t.Fatalf("Ready() = %v, want replacement key queued", ready)
+	}
+}
+
+func TestRunUploadFailureAfterSamePathReplacementDoesNotPoisonReplacement(t *testing.T) {
+	t.Parallel()
+
+	cfgJob := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    "/source",
+		LinkDir:      "/link",
+		RcloneRemote: "remote:movie",
+	}
+	linkPath := "/link/movie.mkv"
+
+	s := newTestService()
+	s.cfg.RetryInterval = time.Minute
+	s.now = func() time.Time { return time.Date(2026, 4, 23, 11, 31, 0, 0, time.UTC) }
+	s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
+
+	oldTask, err := s.registerTask(cfgJob, "/source/movie-old.mkv", linkPath)
+	if err != nil {
+		t.Fatalf("registerTask() error = %v", err)
+	}
+	s.scheduler.MarkDirty(oldTask.key)
+	if !s.scheduler.TryStart(oldTask.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+	oldTask.active = true
+
+	replacementTask, err := s.registerTask(cfgJob, "/source/movie-new.mkv", linkPath)
+	if err != nil {
+		t.Fatalf("registerTask() error = %v", err)
+	}
+	s.scheduler.MarkDirty(replacementTask.key)
+
+	s.runUpload(context.Background(), oldTask)
+
+	if current := s.taskForKey(linkPath); current != replacementTask {
+		t.Fatalf("taskForKey() = %#v, want replacement task %#v", current, replacementTask)
+	}
+	if _, ok := s.retryDue[linkPath]; ok {
+		t.Fatalf("retryDue[%q] exists, want stale failure to leave replacement out of retry wait", linkPath)
+	}
+	if ready := s.scheduler.Ready(); len(ready) != 1 || ready[0] != linkPath {
+		t.Fatalf("Ready() = %v, want replacement key queued", ready)
+	}
+}
+
 func TestRunUploadFailurePreservesLinkedFileAndRetriesOnlyFileKey(t *testing.T) {
 	t.Parallel()
 
