@@ -25,6 +25,8 @@ import (
 const maxRecentEvents = 10
 const uiKeepaliveInterval = 3 * time.Second
 
+var errUploadSuperseded = errors.New("upload superseded by newer same-path file")
+
 type Service struct {
 	cfg               *config.Config
 	logger            *log.Logger
@@ -77,11 +79,17 @@ type jobRuntime struct {
 	cfg        config.JobConfig
 	key        string
 	sourcePath string
-	sourceInfo os.FileInfo
 	linkPath   string
 	remoteDir  string
 	summary    string
 	active     bool
+	cancel     context.CancelCauseFunc
+}
+
+type queueTaskState struct {
+	wasQueued        bool
+	clearedRetryWait bool
+	replacedRunning  bool
 }
 
 func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
@@ -293,12 +301,17 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 		s.logger.Printf("wait stable %s: %v", path, err)
 		return
 	}
-	task, wasQueued, wasPendingRetry, err := s.linkAndQueueTask(cfgJob, path)
+	task, state, err := s.linkAndQueueTask(cfgJob, path)
 	if err != nil {
 		s.logger.Printf("queue task %s: %v", path, err)
 		return
 	}
-	if !wasQueued && !wasPendingRetry {
+	switch {
+	case state.replacedRunning:
+		s.appendSchedulerEventNow(task, "检测到同路径文件更新，已取消旧上传并重新排队")
+	case state.clearedRetryWait:
+		s.appendSchedulerEventNow(task, "检测到同路径文件更新，已清除重试等待并重新排队")
+	case !state.wasQueued:
 		s.appendSchedulerEventNow(task, "检测到新文件，任务标记为待上传")
 	}
 	s.signalWake()
@@ -308,51 +321,59 @@ func (s *Service) registerTask(cfgJob config.JobConfig, sourcePath, linkPath str
 	s.completionMu.Lock()
 	defer s.completionMu.Unlock()
 
-	task, _, _, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
+	task, _, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
 	if err != nil {
 		return nil, err
 	}
 	return task, nil
 }
 
-func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPath string) (*jobRuntime, bool, bool, error) {
+func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPath string) (*jobRuntime, queueTaskState, error) {
 	remoteDir, err := rclone.BuildRemoteDir(cfgJob.SourceDir, cfgJob.RcloneRemote, sourcePath)
 	if err != nil {
-		return nil, false, false, err
+		return nil, queueTaskState{}, err
 	}
-	sourceInfo, _ := os.Stat(sourcePath)
-	ready := s.isJobReady(linkPath)
-	pendingRetry := s.isRetryWaiting(linkPath)
+	state := queueTaskState{
+		wasQueued:        s.isJobReady(linkPath),
+		clearedRetryWait: s.isRetryWaiting(linkPath),
+	}
+
+	var cancelRunning context.CancelCauseFunc
 
 	s.mu.Lock()
 	if s.jobs == nil {
 		s.jobs = map[string]*jobRuntime{}
 	}
-	task := s.jobs[linkPath]
-	clearRetryWait := pendingRetry && (task == nil || task.sourcePath != sourcePath || sourceIdentityChanged(task.sourceInfo, sourceInfo))
-	if task == nil || task.active || (!ready && !pendingRetry) || clearRetryWait {
+	current := s.jobs[linkPath]
+	task := current
+	if current == nil || current.active {
 		task = &jobRuntime{}
 		s.jobs[linkPath] = task
+	}
+	if current != nil && current.active {
+		state.replacedRunning = true
+		cancelRunning = current.cancel
 	}
 	task.cfg = cfgJob
 	task.key = linkPath
 	task.sourcePath = sourcePath
-	task.sourceInfo = sourceInfo
 	task.linkPath = linkPath
 	task.remoteDir = remoteDir
-	if clearRetryWait {
+	task.summary = ""
+	task.active = false
+	task.cancel = nil
+	if state.clearedRetryWait {
 		delete(s.retryDue, linkPath)
 	}
 	s.mu.Unlock()
 
-	if clearRetryWait {
+	if state.clearedRetryWait {
 		s.scheduler.RetryJob(linkPath)
 	}
-	return task, ready, pendingRetry, nil
-}
-
-func sourceIdentityChanged(previous os.FileInfo, current os.FileInfo) bool {
-	return previous != nil && current != nil && !os.SameFile(previous, current)
+	if cancelRunning != nil {
+		cancelRunning(errUploadSuperseded)
+	}
+	return task, state, nil
 }
 
 func (s *Service) registerTaskByLinkPath(cfgJob config.JobConfig, linkPath string) (*jobRuntime, error) {
@@ -363,21 +384,21 @@ func (s *Service) registerTaskByLinkPath(cfgJob config.JobConfig, linkPath strin
 	return s.registerTask(cfgJob, sourcePath, linkPath)
 }
 
-func (s *Service) linkAndQueueTask(cfgJob config.JobConfig, sourcePath string) (*jobRuntime, bool, bool, error) {
+func (s *Service) linkAndQueueTask(cfgJob config.JobConfig, sourcePath string) (*jobRuntime, queueTaskState, error) {
 	s.completionMu.Lock()
 	defer s.completionMu.Unlock()
 
 	linkPath, err := watcher.LinkFile(cfgJob.SourceDir, cfgJob.LinkDir, sourcePath)
 	if err != nil {
-		return nil, false, false, err
+		return nil, queueTaskState{}, err
 	}
-	task, wasQueued, wasPendingRetry, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
+	task, state, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
 	if err != nil {
-		return nil, false, false, err
+		return nil, queueTaskState{}, err
 	}
 	s.scheduler.MarkDirty(task.key)
 	s.runAfterMarkDirty(task.key)
-	return task, wasQueued, wasPendingRetry, nil
+	return task, state, nil
 }
 
 func (s *Service) taskForKey(key string) *jobRuntime {
@@ -387,17 +408,19 @@ func (s *Service) taskForKey(key string) *jobRuntime {
 	return s.jobs[key]
 }
 
-func (s *Service) activateTaskForUpload(key string) *jobRuntime {
+func (s *Service) activateTaskForUpload(parent context.Context, key string) (*jobRuntime, context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	job := s.jobs[key]
 	if job == nil {
-		return nil
+		return nil, nil
 	}
+	uploadCtx, cancel := context.WithCancelCause(parent)
 	job.active = true
 	job.summary = "等待 rclone 输出"
-	return job
+	job.cancel = cancel
+	return job, uploadCtx
 }
 
 func (s *Service) removeTaskIfCompleted(job *jobRuntime) bool {
@@ -480,23 +503,30 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 		if !s.scheduler.TryStart(key) {
 			continue
 		}
-		job := s.activateTaskForUpload(key)
+		job, uploadCtx := s.activateTaskForUpload(ctx, key)
 		if job == nil {
 			s.scheduler.Finish(key, false)
 			s.scheduler.Forget(key)
 			continue
 		}
 		s.appendSchedulerEventNow(job, "调度开始上传")
-		s.startUpload(ctx, job)
+		s.startUpload(uploadCtx, job)
 	}
 }
 
 func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	s.logRcloneCommand(job)
-	uploadedLinkIdentity, identityErr := linkedFileIdentity(job.linkPath)
 	err := s.copyJob(ctx, job)
 	if err != nil {
+		if errors.Is(context.Cause(ctx), errUploadSuperseded) {
+			s.finishUploadSuperseded(job)
+			return
+		}
 		s.finishUploadFailure(job, fmt.Sprintf("上传失败: %v", err))
+		return
+	}
+	if errors.Is(context.Cause(ctx), errUploadSuperseded) {
+		s.finishUploadSuperseded(job)
 		return
 	}
 
@@ -505,32 +535,17 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 
 	s.mu.Lock()
 	job.active = false
+	job.cancel = nil
 	job.summary = "上传完成"
 	s.mu.Unlock()
 
-	if identityErr != nil {
-		s.logger.Printf("stat linked file %s before upload: %v; skipping cleanup", job.linkPath, identityErr)
-		s.finishUploadSuccessLocked(job)
-		return
-	}
-
-	sameLinkedFile, err := linkedFileMatchesIdentity(uploadedLinkIdentity, job.linkPath)
-	if err != nil {
-		s.logger.Printf("check linked file identity %s: %v", job.linkPath, err)
-		s.finishUploadFailureLocked(job, fmt.Sprintf("清理失败: %v", err))
-		return
-	}
-	if !sameLinkedFile {
-		s.finishUploadSuccessLocked(job)
-		return
-	}
-	if current := s.taskForKey(job.key); current != nil && current != job {
-		s.finishUploadSuccessLocked(job)
-		return
-	}
-
 	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
-		if missing, statErr := linkedFileMissing(job.linkPath); statErr == nil && missing {
+		if errors.Is(err, os.ErrNotExist) {
+			s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
+			s.finishUploadSuccessLocked(job)
+			return
+		}
+		if _, statErr := os.Lstat(job.linkPath); errors.Is(statErr, os.ErrNotExist) {
 			s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
 			s.finishUploadSuccessLocked(job)
 			return
@@ -557,6 +572,7 @@ func (s *Service) finishUploadFailureLocked(job *jobRuntime, summary string) {
 
 	s.mu.Lock()
 	job.active = false
+	job.cancel = nil
 	job.summary = summary
 	current := s.jobs[job.key]
 	if current == job {
@@ -567,12 +583,27 @@ func (s *Service) finishUploadFailureLocked(job *jobRuntime, summary string) {
 	if current == job {
 		s.scheduler.FinishFailed(job.key)
 		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
-	} else if current != nil {
-		s.scheduler.Finish(job.key, true)
-		s.appendSchedulerEventNow(job, "上传失败，已有新任务")
 	} else {
 		s.scheduler.Finish(job.key, false)
 	}
+	s.signalWake()
+}
+
+func (s *Service) finishUploadSuperseded(job *jobRuntime) {
+	s.completionMu.Lock()
+	defer s.completionMu.Unlock()
+
+	if job == nil {
+		return
+	}
+
+	s.mu.Lock()
+	job.active = false
+	job.cancel = nil
+	job.summary = "已被新文件替换"
+	s.mu.Unlock()
+
+	s.scheduler.Finish(job.key, true)
 	s.signalWake()
 }
 
@@ -585,7 +616,7 @@ func (s *Service) finishUploadSuccess(job *jobRuntime) {
 
 func (s *Service) finishUploadSuccessLocked(job *jobRuntime) {
 	s.scheduler.Finish(job.key, false)
-	message := "上传完成，已有新任务"
+	message := "上传完成，任务保留"
 	if s.removeTaskIfCompleted(job) {
 		message = "上传完成，任务清空"
 	}
@@ -617,36 +648,6 @@ func remoteDirWithTrailingSlash(remoteDir string) string {
 		return remoteDir
 	}
 	return remoteDir + "/"
-}
-
-func linkedFileMissing(path string) (bool, error) {
-	_, err := os.Lstat(path)
-	if err == nil {
-		return false, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return true, nil
-	}
-	return false, err
-}
-
-func linkedFileIdentity(path string) (os.FileInfo, error) {
-	return os.Stat(path)
-}
-
-func linkedFileMatchesIdentity(identity os.FileInfo, path string) (bool, error) {
-	if identity == nil {
-		return false, nil
-	}
-
-	current, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	return os.SameFile(identity, current), nil
 }
 
 func formatShellCommand(args []string) string {
