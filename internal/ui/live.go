@@ -13,6 +13,7 @@ const (
 	hideCursor           = "\x1b[?25l"
 	showCursor           = "\x1b[?25h"
 	repaintFromHome      = "\x1b[H\x1b[J"
+	refreshFromHome      = "\x1b[H"
 	defaultWidth         = 80
 )
 
@@ -26,6 +27,10 @@ func LeaveAlternateScreen() string {
 
 func RewriteFrame(content string) string {
 	return repaintFromHome + content
+}
+
+func RefreshFrame(content string) string {
+	return refreshFromHome + content + "\x1b[J"
 }
 
 func DetectWidth(writer io.Writer) int {

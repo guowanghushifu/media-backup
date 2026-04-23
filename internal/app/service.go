@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 )
 
 const maxRecentEvents = 10
+const uiKeepaliveInterval = 5 * time.Second
 
 type Service struct {
 	cfg            *config.Config
@@ -45,6 +47,16 @@ type Service struct {
 	recentEvents []recentEvent
 	retryDue     map[string]time.Time
 	wakeCh       chan struct{}
+	uiWakeCh     chan struct{}
+}
+
+type uiRenderState struct {
+	active     []ui.JobStatus
+	events     []ui.EventRecord
+	waiting    int
+	width      int
+	renderedAt time.Time
+	rendered   bool
 }
 
 type recentEvent struct {
@@ -81,6 +93,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		processing:     map[string]struct{}{},
 		retryDue:       map[string]time.Time{},
 		wakeCh:         make(chan struct{}, 1),
+		uiWakeCh:       make(chan struct{}, 1),
 	}
 	s.addWatches = s.addRecursiveWatches
 	s.copyJob = s.copyWithRclone
@@ -414,14 +427,17 @@ func (s *Service) runUILoop(ctx context.Context, ticks <-chan time.Time) {
 	s.writeUI(ui.EnterAlternateScreen())
 	defer s.writeUI("\n")
 	defer s.writeUI(ui.LeaveAlternateScreen())
-	s.renderDashboard(s.currentTime())
+	state := uiRenderState{}
+	state = s.renderDashboardIfNeeded(s.currentTime(), state, true)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-ticks:
-			s.renderDashboard(now)
+			state = s.renderDashboardIfNeeded(now, state, false)
+		case <-s.uiWakeCh:
+			state = s.renderDashboardIfNeeded(s.currentTime(), state, false)
 		}
 	}
 }
@@ -441,6 +457,41 @@ func (s *Service) renderDashboard(now time.Time) {
 	}
 	content := ui.RenderDashboardWithWidth(now, active, events, waiting, s.cfg.MaxParallelUploads, width)
 	s.writeUI(ui.RewriteFrame(content))
+}
+
+func (s *Service) renderDashboardIfNeeded(now time.Time, previous uiRenderState, force bool) uiRenderState {
+	active, events, waiting := s.snapshotUI()
+	width := ui.DetectWidth(s.uiWriter)
+	if s.uiWidth != nil {
+		width = s.uiWidth()
+	}
+
+	fullRefresh := force || !previous.rendered || width != previous.width
+	stateChanged := !previous.rendered ||
+		waiting != previous.waiting ||
+		!reflect.DeepEqual(active, previous.active) ||
+		!reflect.DeepEqual(events, previous.events)
+	keepaliveDue := !previous.rendered || !now.Before(previous.renderedAt.Add(uiKeepaliveInterval))
+
+	if !fullRefresh && !stateChanged && !keepaliveDue {
+		return previous
+	}
+
+	content := ui.RenderDashboardWithWidth(now, active, events, waiting, s.cfg.MaxParallelUploads, width)
+	if fullRefresh {
+		s.writeUI(ui.RewriteFrame(content))
+	} else {
+		s.writeUI(ui.RefreshFrame(content))
+	}
+
+	return uiRenderState{
+		active:     active,
+		events:     events,
+		waiting:    waiting,
+		width:      width,
+		renderedAt: now,
+		rendered:   true,
+	}
 }
 
 func (s *Service) writeUI(content string) {
@@ -510,6 +561,7 @@ func (s *Service) appendRecentEventLocked(at time.Time, message string) {
 	if len(s.recentEvents) > maxRecentEvents {
 		s.recentEvents = append([]recentEvent(nil), s.recentEvents[len(s.recentEvents)-maxRecentEvents:]...)
 	}
+	s.signalUIWake()
 }
 
 func (s *Service) handleRcloneOutputLine(job *jobRuntime, line string, now func() time.Time) {
@@ -518,6 +570,7 @@ func (s *Service) handleRcloneOutputLine(job *jobRuntime, line string, now func(
 		s.mu.Lock()
 		job.summary = stats
 		s.mu.Unlock()
+		s.signalUIWake()
 		return
 	}
 	if payload, ok := rclone.ParseEvent(line); ok {
@@ -551,6 +604,13 @@ func (s *Service) addRecursiveWatches(root string) error {
 func (s *Service) signalWake() {
 	select {
 	case s.wakeCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Service) signalUIWake() {
+	select {
+	case s.uiWakeCh <- struct{}{}:
 	default:
 	}
 }

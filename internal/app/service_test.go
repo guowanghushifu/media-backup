@@ -157,7 +157,48 @@ func TestHandleRcloneOutputLineUpdatesSummaryForStatsWithoutRecentEvent(t *testi
 	}
 }
 
-func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
+func TestRunUILoopSkipsUnchangedRefreshUntilKeepalive(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 4, 22, 17, 4, 9, 0, time.UTC)
+	keepalive := time.Date(2026, 4, 22, 17, 4, 14, 0, time.UTC)
+	s := newTestService()
+	writer := newRecordingWriter()
+	s.uiWriter = writer
+	s.uiWidth = func() int { return 80 }
+	s.now = func() time.Time { return start }
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		s.runUILoop(ctx, ticks)
+		close(done)
+	}()
+
+	writer.waitForWrites(t, 2)
+
+	ticks <- start.Add(time.Second)
+	writer.assertNoWrite(t)
+
+	ticks <- keepalive
+	writer.waitForWrites(t, 1)
+
+	cancel()
+	<-done
+
+	active, events, waiting := s.snapshotUI()
+	want := ui.EnterAlternateScreen() +
+		ui.RewriteFrame(ui.RenderDashboardWithWidth(start, active, events, waiting, s.cfg.MaxParallelUploads, 80)) +
+		ui.RefreshFrame(ui.RenderDashboardWithWidth(keepalive, active, events, waiting, s.cfg.MaxParallelUploads, 80)) +
+		ui.LeaveAlternateScreen() +
+		"\n"
+	if got := writer.String(); got != want {
+		t.Fatalf("runUILoop() output = %q, want %q", got, want)
+	}
+}
+
+func TestRunUILoopUsesFullRefreshWhenWidthChanges(t *testing.T) {
 	t.Parallel()
 
 	start := time.Date(2026, 4, 22, 17, 4, 9, 0, time.UTC)
@@ -165,7 +206,14 @@ func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
 	s := newTestService()
 	writer := newRecordingWriter()
 	s.uiWriter = writer
-	s.uiWidth = func() int { return 80 }
+	widths := []int{80, 100}
+	s.uiWidth = func() int {
+		width := widths[0]
+		if len(widths) > 1 {
+			widths = widths[1:]
+		}
+		return width
+	}
 	s.now = func() time.Time { return start }
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -187,7 +235,50 @@ func TestRunUILoopUsesAlternateScreenLifecycle(t *testing.T) {
 	active, events, waiting := s.snapshotUI()
 	want := ui.EnterAlternateScreen() +
 		ui.RewriteFrame(ui.RenderDashboardWithWidth(start, active, events, waiting, s.cfg.MaxParallelUploads, 80)) +
-		ui.RewriteFrame(ui.RenderDashboardWithWidth(now, active, events, waiting, s.cfg.MaxParallelUploads, 80)) +
+		ui.RewriteFrame(ui.RenderDashboardWithWidth(now, active, events, waiting, s.cfg.MaxParallelUploads, 100)) +
+		ui.LeaveAlternateScreen() +
+		"\n"
+	if got := writer.String(); got != want {
+		t.Fatalf("runUILoop() output = %q, want %q", got, want)
+	}
+}
+
+func TestRunUILoopRefreshesImmediatelyOnUIWake(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 4, 22, 17, 4, 9, 0, time.UTC)
+	s := newTestService()
+	writer := newRecordingWriter()
+	s.uiWriter = writer
+	s.uiWidth = func() int { return 80 }
+	s.now = func() time.Time { return start }
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		s.runUILoop(ctx, ticks)
+		close(done)
+	}()
+
+	writer.waitForWrites(t, 2)
+
+	s.mu.Lock()
+	s.recentEvents = append(s.recentEvents, recentEvent{
+		at:      start,
+		message: "wake refresh",
+	})
+	s.mu.Unlock()
+	s.signalUIWake()
+	writer.waitForWrites(t, 1)
+
+	cancel()
+	<-done
+
+	active, events, waiting := s.snapshotUI()
+	want := ui.EnterAlternateScreen() +
+		ui.RewriteFrame(ui.RenderDashboardWithWidth(start, nil, nil, 0, s.cfg.MaxParallelUploads, 80)) +
+		ui.RefreshFrame(ui.RenderDashboardWithWidth(start, active, events, waiting, s.cfg.MaxParallelUploads, 80)) +
 		ui.LeaveAlternateScreen() +
 		"\n"
 	if got := writer.String(); got != want {
@@ -801,6 +892,7 @@ func newTestService() *Service {
 		jobs:      map[string]*jobRuntime{},
 		retryDue:  map[string]time.Time{},
 		wakeCh:    make(chan struct{}, 1),
+		uiWakeCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -844,5 +936,15 @@ func (w *recordingWriter) waitForWrites(t *testing.T, n int) {
 		case <-timeout:
 			t.Fatalf("timed out waiting for write %d; current output = %q", i+1, w.String())
 		}
+	}
+}
+
+func (w *recordingWriter) assertNoWrite(t *testing.T) {
+	t.Helper()
+
+	select {
+	case <-w.writes:
+		t.Fatalf("expected no additional writes; current output = %q", w.String())
+	case <-time.After(100 * time.Millisecond):
 	}
 }
