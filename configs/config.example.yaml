@@ -3,6 +3,8 @@ poll_interval: 1s
 stable_duration: 30s
 # 文件上传失败后，等待指定时间后重试
 retry_interval: 10m
+# 单个文件连续失败达到该次数后停止重试，0 表示无限重试
+max_retry_count: 5
 # rclone并发上传任务数量
 max_parallel_uploads: 5
 # 文件监控后缀列表
@@ -28,6 +30,11 @@ proxy:
   port: 7890
   username: ""
   password: ""
+# Telegram 通知设置，enabled = true 才会在达到最大重试次数后发送最终失败通知
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
 # 任务列表，source_dir是监控源目录，link_dir是硬链接目录，rclone_remote是rclone远端目录
 jobs:
   - name: 4K-REMUX
