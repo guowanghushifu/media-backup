@@ -61,6 +61,12 @@ type uiRenderState struct {
 	rendered   bool
 }
 
+type uiActiveRow struct {
+	status   ui.JobStatus
+	linkPath string
+	jobKey   string
+}
+
 type recentEvent struct {
 	at      time.Time
 	message string
@@ -716,7 +722,28 @@ func (s *Service) snapshotUI() ([]ui.JobStatus, []ui.EventRecord, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	active := make([]ui.JobStatus, 0, len(s.jobs))
+	rows := s.snapshotUIRowsLocked()
+	active := make([]ui.JobStatus, 0, len(rows))
+	for _, row := range rows {
+		active = append(active, row.status)
+	}
+	events := make([]ui.EventRecord, 0, len(s.recentEvents))
+	for i := len(s.recentEvents) - 1; i >= 0; i-- {
+		event := s.recentEvents[i]
+		events = append(events, ui.EventRecord{At: event.at, Message: event.message})
+	}
+	return active, events, len(s.scheduler.Ready())
+}
+
+func (s *Service) snapshotUIRows() []uiActiveRow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.snapshotUIRowsLocked()
+}
+
+func (s *Service) snapshotUIRowsLocked() []uiActiveRow {
+	rows := make([]uiActiveRow, 0, len(s.jobs))
 	for _, job := range s.jobs {
 		if !job.active {
 			continue
@@ -725,20 +752,28 @@ func (s *Service) snapshotUI() ([]ui.JobStatus, []ui.EventRecord, int) {
 		if summary == "" {
 			summary = "等待 rclone 输出"
 		}
-		active = append(active, ui.JobStatus{Name: filepath.Base(job.linkPath), Summary: summary})
+		rows = append(rows, uiActiveRow{
+			status: ui.JobStatus{
+				Name:    filepath.Base(job.linkPath),
+				Summary: summary,
+			},
+			linkPath: job.linkPath,
+			jobKey:   job.key,
+		})
 	}
-	sort.Slice(active, func(i, j int) bool {
-		if active[i].Name == active[j].Name {
-			return active[i].Summary < active[j].Summary
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].status.Name != rows[j].status.Name {
+			return rows[i].status.Name < rows[j].status.Name
 		}
-		return active[i].Name < active[j].Name
+		if rows[i].status.Summary != rows[j].status.Summary {
+			return rows[i].status.Summary < rows[j].status.Summary
+		}
+		if rows[i].jobKey != rows[j].jobKey {
+			return rows[i].jobKey < rows[j].jobKey
+		}
+		return rows[i].linkPath < rows[j].linkPath
 	})
-	events := make([]ui.EventRecord, 0, len(s.recentEvents))
-	for i := len(s.recentEvents) - 1; i >= 0; i-- {
-		event := s.recentEvents[i]
-		events = append(events, ui.EventRecord{At: event.at, Message: event.message})
-	}
-	return active, events, len(s.scheduler.Ready())
+	return rows
 }
 
 func (s *Service) appendRecentEvent(at time.Time, message string) {

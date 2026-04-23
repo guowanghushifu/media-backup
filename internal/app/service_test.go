@@ -79,6 +79,56 @@ func TestSnapshotUISortsActiveJobsByName(t *testing.T) {
 	}
 }
 
+func TestSnapshotUIRowsUseStableHiddenTiebreakerForIdenticalVisibleContent(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.jobs["job-b"] = &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE"},
+		key:        "job-b",
+		sourcePath: "/source/library-b/feature.mkv",
+		linkPath:   "/links/library-b/feature.mkv",
+		remoteDir:  "remote:library-b/",
+		summary:    "42 GiB / 100 GiB, 42%, 12 MiB/s, ETA 1h2m3s",
+		active:     true,
+	}
+	s.jobs["job-a"] = &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE"},
+		key:        "job-a",
+		sourcePath: "/source/library-a/feature.mkv",
+		linkPath:   "/links/library-a/feature.mkv",
+		remoteDir:  "remote:library-a/",
+		summary:    "42 GiB / 100 GiB, 42%, 12 MiB/s, ETA 1h2m3s",
+		active:     true,
+	}
+
+	rows := s.snapshotUIRows()
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2", len(rows))
+	}
+	if got, want := rows[0].jobKey, "job-a"; got != want {
+		t.Fatalf("rows[0].jobKey = %q, want %q", got, want)
+	}
+	if got, want := rows[1].jobKey, "job-b"; got != want {
+		t.Fatalf("rows[1].jobKey = %q, want %q", got, want)
+	}
+
+	active, _, _ := s.snapshotUI()
+	if len(active) != 2 {
+		t.Fatalf("len(active) = %d, want 2", len(active))
+	}
+	wantStatus := ui.JobStatus{
+		Name:    "feature.mkv",
+		Summary: "42 GiB / 100 GiB, 42%, 12 MiB/s, ETA 1h2m3s",
+	}
+	if got := active[0]; got != wantStatus {
+		t.Fatalf("active[0] = %#v, want %#v", got, wantStatus)
+	}
+	if got := active[1]; got != wantStatus {
+		t.Fatalf("active[1] = %#v, want %#v", got, wantStatus)
+	}
+}
+
 func TestSnapshotUIUsesActiveFileBasenameInsteadOfConfigName(t *testing.T) {
 	t.Parallel()
 
