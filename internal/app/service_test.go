@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,14 @@ import (
 	"github.com/guowanghushifu/media-backup/internal/queue"
 	"github.com/guowanghushifu/media-backup/internal/ui"
 )
+
+func TestJobRuntimeDoesNotExposeDirectoryRerunField(t *testing.T) {
+	t.Parallel()
+
+	if _, ok := reflect.TypeOf(jobRuntime{}).FieldByName("dirtyDuringRun"); ok {
+		t.Fatal("jobRuntime still has obsolete dirtyDuringRun field")
+	}
+}
 
 func TestSnapshotUIIncludesRecentEventsWhileIdle(t *testing.T) {
 	t.Parallel()
@@ -841,20 +850,6 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 
 	t.Run("success clears job", func(t *testing.T) {
 		s, job := makeService(time.Date(2026, 4, 23, 10, 0, 4, 0, time.UTC))
-
-		s.runUpload(context.Background(), job)
-
-		if len(s.recentEvents) != 1 {
-			t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
-		}
-		if got := s.recentEvents[0].message; got != "[MOVIE] 上传完成，任务清空" {
-			t.Fatalf("recentEvents[0].message = %q, want success event", got)
-		}
-	})
-
-	t.Run("success ignores stale dirty flag", func(t *testing.T) {
-		s, job := makeService(time.Date(2026, 4, 23, 10, 0, 5, 0, time.UTC))
-		job.dirtyDuringRun = true
 
 		s.runUpload(context.Background(), job)
 

@@ -67,14 +67,13 @@ type recentEvent struct {
 }
 
 type jobRuntime struct {
-	cfg            config.JobConfig
-	key            string
-	sourcePath     string
-	linkPath       string
-	remoteDir      string
-	summary        string
-	active         bool
-	dirtyDuringRun bool
+	cfg        config.JobConfig
+	key        string
+	sourcePath string
+	linkPath   string
+	remoteDir  string
+	summary    string
+	active     bool
 }
 
 func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
