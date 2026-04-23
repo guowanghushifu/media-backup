@@ -1565,6 +1565,193 @@ func TestRunUploadFailurePreservesLinkedFileAndRetriesOnlyFileKey(t *testing.T) 
 	}
 }
 
+func TestRunUploadFailureBelowRetryLimitKeepsRetrying(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.cfg.RetryInterval = time.Minute
+	s.cfg.MaxRetryCount = 3
+	s.now = func() time.Time { return time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC) }
+	s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
+
+	job := &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link", RcloneRemote: "remote:movie"},
+		key:        "/link/movie.mkv",
+		sourcePath: "/source/movie.mkv",
+		linkPath:   "/link/movie.mkv",
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if got := s.failureCounts[job.key]; got != 1 {
+		t.Fatalf("failureCounts[%q] = %d, want 1", job.key, got)
+	}
+	if _, ok := s.retryDue[job.key]; !ok {
+		t.Fatalf("retryDue missing %q below retry limit", job.key)
+	}
+}
+
+func TestRunUploadFailureAtRetryLimitStopsRetryAndNotifies(t *testing.T) {
+	t.Parallel()
+
+	var notified jobFailureNotification
+	var notifyCalls int
+
+	s := newTestService()
+	s.cfg.RetryInterval = time.Minute
+	s.cfg.MaxRetryCount = 2
+	s.now = func() time.Time { return time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC) }
+	s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
+	s.notifyFinalFailure = func(n jobFailureNotification) error {
+		notifyCalls++
+		notified = n
+		return nil
+	}
+
+	job := &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link", RcloneRemote: "remote:movie"},
+		key:        "/link/movie.mkv",
+		sourcePath: "/source/movie.mkv",
+		linkPath:   "/link/movie.mkv",
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.failureCounts[job.key] = 1
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if got := s.failureCounts[job.key]; got != 2 {
+		t.Fatalf("failureCounts[%q] = %d, want 2", job.key, got)
+	}
+	if _, ok := s.retryDue[job.key]; ok {
+		t.Fatalf("retryDue[%q] exists, want retry to stop at limit", job.key)
+	}
+	if notifyCalls != 1 {
+		t.Fatalf("notifyCalls = %d, want 1", notifyCalls)
+	}
+	if notified.LinkPath != job.linkPath {
+		t.Fatalf("notified.LinkPath = %q, want %q", notified.LinkPath, job.linkPath)
+	}
+	if got := s.recentEvents[len(s.recentEvents)-1].message; got != "[MOVIE] movie.mkv｜上传失败，达到最大重试次数，停止重试" {
+		t.Fatalf("recentEvents[last].message = %q, want retry-limit event", got)
+	}
+}
+
+func TestRunUploadSuccessClearsFailureCount(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.failureCounts["/link/movie.mkv"] = 2
+
+	job := &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link", RcloneRemote: "remote:movie"},
+		key:        "/link/movie.mkv",
+		sourcePath: "/source/movie.mkv",
+		linkPath:   "/link/movie.mkv",
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if _, ok := s.failureCounts[job.key]; ok {
+		t.Fatalf("failureCounts still contains %q after success", job.key)
+	}
+}
+
+func TestProcessFileSamePathReplacementClearsFailureCount(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	linkPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("LinkFile() error = %v", err)
+	}
+
+	cfgJob := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movie"}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Millisecond
+	s.cfg.PollInterval = time.Millisecond
+	s.failureCounts[linkPath] = 2
+
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s.processFile(context.Background(), cfgJob, sourcePath)
+
+	if _, ok := s.failureCounts[linkPath]; ok {
+		t.Fatalf("failureCounts still contains %q after same-path replacement", linkPath)
+	}
+}
+
+func TestRunUploadRetryLimitNotificationErrorIsLoggedOnly(t *testing.T) {
+	t.Parallel()
+
+	var logBuf strings.Builder
+	s := newTestService()
+	s.logger = log.New(&logBuf, "", 0)
+	s.cfg.RetryInterval = time.Minute
+	s.cfg.MaxRetryCount = 1
+	s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
+	s.notifyFinalFailure = func(jobFailureNotification) error { return errors.New("telegram send failed") }
+
+	job := &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link", RcloneRemote: "remote:movie"},
+		key:        "/link/movie.mkv",
+		sourcePath: "/source/movie.mkv",
+		linkPath:   "/link/movie.mkv",
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if !strings.Contains(logBuf.String(), "telegram send failed") {
+		t.Fatalf("log output = %q, want telegram error log", logBuf.String())
+	}
+	if _, ok := s.retryDue[job.key]; ok {
+		t.Fatalf("retryDue[%q] exists, want retry to stay stopped after notify error", job.key)
+	}
+}
+
 func TestRunUploadBindsRcloneOutputToJob(t *testing.T) {
 	t.Parallel()
 
@@ -1789,16 +1976,18 @@ func TestReleaseRetriesDoesNotRecordEventBeforeDueTime(t *testing.T) {
 
 func newTestService() *Service {
 	return &Service{
-		cfg:               &config.Config{MaxParallelUploads: 5},
-		logger:            log.New(io.Discard, "", 0),
-		scheduler:         queue.New(queue.Options{MaxParallel: 5}),
-		configJobs:        map[string]config.JobConfig{},
-		jobs:              map[string]*jobRuntime{},
-		scanLinkedFiles:   func(string, []string) ([]string, error) { return nil, nil },
-		cleanupLinkedFile: func(string, string) error { return nil },
-		retryDue:          map[string]time.Time{},
-		wakeCh:            make(chan struct{}, 1),
-		uiWakeCh:          make(chan struct{}, 1),
+		cfg:                &config.Config{MaxParallelUploads: 5},
+		logger:             log.New(io.Discard, "", 0),
+		scheduler:          queue.New(queue.Options{MaxParallel: 5}),
+		configJobs:         map[string]config.JobConfig{},
+		jobs:               map[string]*jobRuntime{},
+		scanLinkedFiles:    func(string, []string) ([]string, error) { return nil, nil },
+		cleanupLinkedFile:  func(string, string) error { return nil },
+		retryDue:           map[string]time.Time{},
+		failureCounts:      map[string]int{},
+		notifyFinalFailure: func(jobFailureNotification) error { return nil },
+		wakeCh:             make(chan struct{}, 1),
+		uiWakeCh:           make(chan struct{}, 1),
 	}
 }
 

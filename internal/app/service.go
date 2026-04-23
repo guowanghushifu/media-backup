@@ -28,31 +28,33 @@ const uiKeepaliveInterval = 3 * time.Second
 var errUploadSuperseded = errors.New("upload superseded by newer same-path file")
 
 type Service struct {
-	cfg               *config.Config
-	logger            *log.Logger
-	scheduler         *queue.Scheduler
-	watcher           *fsnotify.Watcher
-	uiWriter          io.Writer
-	mkdirAll          func(string, os.FileMode) error
-	addWatches        func(string) error
-	scanExisting      func(string, string, []string, time.Duration) (int, error)
-	scanLinkedFiles   func(string, []string) ([]string, error)
-	copyJob           func(context.Context, *jobRuntime) error
-	cleanupLinkedFile func(string, string) error
-	startUpload       func(context.Context, *jobRuntime)
-	afterMarkDirty    func(string)
-	now               func() time.Time
-	uiWidth           func() int
+	cfg                *config.Config
+	logger             *log.Logger
+	scheduler          *queue.Scheduler
+	watcher            *fsnotify.Watcher
+	uiWriter           io.Writer
+	mkdirAll           func(string, os.FileMode) error
+	addWatches         func(string) error
+	scanExisting       func(string, string, []string, time.Duration) (int, error)
+	scanLinkedFiles    func(string, []string) ([]string, error)
+	copyJob            func(context.Context, *jobRuntime) error
+	cleanupLinkedFile  func(string, string) error
+	startUpload        func(context.Context, *jobRuntime)
+	afterMarkDirty     func(string)
+	now                func() time.Time
+	uiWidth            func() int
+	notifyFinalFailure func(jobFailureNotification) error
 
-	mu           sync.Mutex
-	completionMu sync.Mutex
-	configJobs   map[string]config.JobConfig
-	jobs         map[string]*jobRuntime
-	processing   map[string]struct{}
-	recentEvents []recentEvent
-	retryDue     map[string]time.Time
-	wakeCh       chan struct{}
-	uiWakeCh     chan struct{}
+	mu            sync.Mutex
+	completionMu  sync.Mutex
+	configJobs    map[string]config.JobConfig
+	jobs          map[string]*jobRuntime
+	processing    map[string]struct{}
+	recentEvents  []recentEvent
+	retryDue      map[string]time.Time
+	failureCounts map[string]int
+	wakeCh        chan struct{}
+	uiWakeCh      chan struct{}
 }
 
 type uiRenderState struct {
@@ -97,6 +99,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	notifier := newTelegramNotifier(cfg.Telegram)
 
 	s := &Service{
 		cfg:               cfg,
@@ -113,11 +116,18 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		jobs:              make(map[string]*jobRuntime),
 		processing:        map[string]struct{}{},
 		retryDue:          map[string]time.Time{},
+		failureCounts:     map[string]int{},
 		wakeCh:            make(chan struct{}, 1),
 		uiWakeCh:          make(chan struct{}, 1),
 	}
 	s.addWatches = s.addRecursiveWatches
 	s.copyJob = s.copyWithRclone
+	s.notifyFinalFailure = func(event jobFailureNotification) error {
+		if notifier == nil {
+			return nil
+		}
+		return notifier.NotifyFinalFailure(context.Background(), event)
+	}
 	s.uiWidth = func() int {
 		return ui.DetectWidth(s.uiWriter)
 	}
@@ -354,6 +364,7 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 		state.replacedRunning = true
 		cancelRunning = current.cancel
 	}
+	_, hadFailures := s.failureCounts[linkPath]
 	task.cfg = cfgJob
 	task.key = linkPath
 	task.sourcePath = sourcePath
@@ -364,6 +375,9 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 	task.cancel = nil
 	if state.clearedRetryWait {
 		delete(s.retryDue, linkPath)
+	}
+	if state.clearedRetryWait || state.replacedRunning || hadFailures {
+		delete(s.failureCounts, linkPath)
 	}
 	s.mu.Unlock()
 
@@ -565,24 +579,64 @@ func (s *Service) finishUploadFailure(job *jobRuntime, summary string) {
 	s.finishUploadFailureLocked(job, summary)
 }
 
+func (s *Service) clearFailureCount(key string) {
+	if key == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.failureCounts, key)
+	s.mu.Unlock()
+}
+
+func (s *Service) incrementFailureCount(key string) int {
+	if key == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failureCounts == nil {
+		s.failureCounts = map[string]int{}
+	}
+	s.failureCounts[key]++
+	return s.failureCounts[key]
+}
+
 func (s *Service) finishUploadFailureLocked(job *jobRuntime, summary string) {
 	if job == nil {
 		return
 	}
+
+	failures := s.incrementFailureCount(job.key)
 
 	s.mu.Lock()
 	job.active = false
 	job.cancel = nil
 	job.summary = summary
 	current := s.jobs[job.key]
-	if current == job {
+	if current != job {
+		delete(s.failureCounts, job.key)
+	}
+	maxRetryCount := s.cfg.MaxRetryCount
+	shouldRetry := current == job && (maxRetryCount == 0 || failures < maxRetryCount)
+	if shouldRetry {
 		s.retryDue[job.key] = s.currentTime().Add(s.cfg.RetryInterval)
 	}
 	s.mu.Unlock()
 
-	if current == job {
+	if current == job && shouldRetry {
 		s.scheduler.FinishFailed(job.key)
 		s.appendSchedulerEventNow(job, "上传失败，进入重试等待")
+	} else if current == job {
+		s.scheduler.Finish(job.key, false)
+		s.appendSchedulerEventNow(job, "上传失败，达到最大重试次数，停止重试")
+		if err := s.notifyFinalFailure(jobFailureNotification{
+			JobName:    job.cfg.Name,
+			LinkPath:   job.linkPath,
+			RetryCount: failures,
+			LastError:  summary,
+		}); err != nil && s.logger != nil {
+			s.logger.Printf("notify telegram final failure for %s: %v", job.linkPath, err)
+		}
 	} else {
 		s.scheduler.Finish(job.key, false)
 	}
@@ -615,6 +669,7 @@ func (s *Service) finishUploadSuccess(job *jobRuntime) {
 }
 
 func (s *Service) finishUploadSuccessLocked(job *jobRuntime) {
+	s.clearFailureCount(job.key)
 	s.scheduler.Finish(job.key, false)
 	message := "上传完成，任务保留"
 	if s.removeTaskIfCompleted(job) {
