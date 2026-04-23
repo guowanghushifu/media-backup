@@ -661,7 +661,7 @@ func (s *Service) snapshotUI() ([]ui.JobStatus, []ui.EventRecord, int) {
 		if summary == "" {
 			summary = "等待 rclone 输出"
 		}
-		active = append(active, ui.JobStatus{Name: job.cfg.Name, Summary: summary})
+		active = append(active, ui.JobStatus{Name: filepath.Base(job.linkPath), Summary: summary})
 	}
 	sort.Slice(active, func(i, j int) bool {
 		if active[i].Name == active[j].Name {

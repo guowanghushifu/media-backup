@@ -78,9 +78,9 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
-		"│ │ 名称              进度      速度              预计           状态        │ │",
-		"│ │ job-a             83%       29.793 MiB/s      预计 00:05     传输中      │ │",
-		"│ │ job-b             31%       48.2 MiB/s        预计 09:12     传输中      │ │",
+		"│ │ 名称                   进度      速度              预计           状态   │ │",
+		"│ │ job-a                  83%       29.793 MiB/s      预计 00:05     传输中 │ │",
+		"│ │ job-b                  31%       48.2 MiB/s        预计 09:12     传输中 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -237,8 +237,8 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
-		"│ │ 名称              进度      速度              预计           状态        │ │",
-		"│ │ job-a             83%       29.793 MiB/s      预计 00:05     传输中      │ │",
+		"│ │ 名称                   进度      速度              预计           状态   │ │",
+		"│ │ job-a                  83%       29.793 MiB/s      预计 00:05     传输中 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -462,7 +462,7 @@ func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "动漫-b") {
 			got := strings.TrimRight(stripNestedFrameLine(line), " ")
-			want := "动漫-b            83%       29.8 MiB/s        预计 00:05     传输中"
+			want := "动漫-b                 83%       29.8 MiB/s        预计 00:05     传输中"
 			if got != want {
 				t.Fatalf("wide-character row = %q, want %q", got, want)
 			}
@@ -549,7 +549,7 @@ func TestRenderDashboardTruncatesLongJobNamesWithoutShiftingColumns(t *testing.T
 	out := ui.RenderDashboard(
 		now,
 		[]ui.JobStatus{
-			{Name: "VERY-LONG-TV-SHOW", Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+			{Name: "VERY-LONG-TV-SHOW-S01E02-1080P-WEB", Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
 			{Name: "job-b", Summary: "12.4 GiB / 40.0 GiB, 31%, 112.342 MiB/s, ETA 1h2m3s"},
 		},
 		nil,
@@ -574,15 +574,111 @@ func TestRenderDashboardTruncatesLongJobNamesWithoutShiftingColumns(t *testing.T
 		t.Fatalf("RenderDashboard() did not render expected rows in %q", out)
 	}
 
-	if !strings.Contains(rows[0], "VERY-LONG-TV-...") {
+	if !strings.Contains(rows[0], "VERY-LONG-TV-SHOW-...") {
 		t.Fatalf("long-name row = %q, want truncated name", rows[0])
 	}
-	if strings.Contains(rows[0], "VERY-LONG-TV-SHOW") {
+	if strings.Contains(rows[0], "VERY-LONG-TV-SHOW-S01E02-1080P-WEB") {
 		t.Fatalf("long-name row = %q, want original name to be truncated", rows[0])
 	}
 
 	headerStarts := columnStarts(header)
 	for _, row := range rows {
+		rowStarts := columnStarts(row)
+		if len(rowStarts) != len(headerStarts) {
+			t.Fatalf("active job row columns = %v, want %v in %q", rowStarts, headerStarts, row)
+		}
+		for i := range headerStarts {
+			if rowStarts[i] != headerStarts[i] {
+				t.Fatalf("active job row column %d starts at %d, want %d; row=%q header=%q", i, rowStarts[i], headerStarts[i], row, header)
+			}
+		}
+	}
+}
+
+func TestRenderDashboardTruncatesActiveFileNamesByDisplayWidth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	longName := "中文剧集名称合集S01E02-1080p-WEB-DL-Group.mkv"
+	out := ui.RenderDashboardWithWidth(
+		now,
+		[]ui.JobStatus{
+			{Name: longName, Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+		},
+		nil,
+		0,
+		5,
+		120,
+	)
+
+	var row string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "83%") {
+			row = stripNestedFrameLine(line)
+			break
+		}
+	}
+	if row == "" {
+		t.Fatalf("RenderDashboard() missing active job row in %q", out)
+	}
+
+	wantName := trimDisplayToWidth(longName, 40)
+	if !strings.Contains(row, wantName) {
+		t.Fatalf("active row = %q, want 40-column display truncation %q", row, wantName)
+	}
+	if strings.Contains(row, "1080p-WEB-DL-Group.mkv") {
+		t.Fatalf("active row = %q, want tail to be truncated", row)
+	}
+}
+
+func TestRenderDashboardTruncatesMixedWidthActiveNamesToFortyColumnsAndKeepsAlignment(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	longMixedName := "电影Movie合集01-特别篇-1080p-Group-Extra-Cut.mkv"
+	out := ui.RenderDashboardWithWidth(
+		now,
+		[]ui.JobStatus{
+			{Name: longMixedName, Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+			{Name: "短片Movie.mkv", Summary: "12.4 GiB / 40.0 GiB, 31%, 112.342 MiB/s, ETA 1h2m3s"},
+		},
+		nil,
+		0,
+		5,
+		120,
+	)
+
+	lines := strings.Split(out, "\n")
+	var header string
+	var mixedRow string
+	var shortRow string
+	for _, line := range lines {
+		if strings.Contains(line, "名称") && strings.Contains(line, "进度") && strings.Contains(line, "状态") {
+			header = stripNestedFrameLine(line)
+			continue
+		}
+		if strings.Contains(line, "83%") {
+			mixedRow = stripNestedFrameLine(line)
+		}
+		if strings.Contains(line, "31%") {
+			shortRow = stripNestedFrameLine(line)
+		}
+	}
+
+	if header == "" || mixedRow == "" || shortRow == "" {
+		t.Fatalf("RenderDashboard() did not render expected active job rows in %q", out)
+	}
+
+	wantName := trimDisplayToWidth(longMixedName, 40)
+	if !strings.Contains(mixedRow, wantName) {
+		t.Fatalf("mixed-width row = %q, want 40-column truncated name %q", mixedRow, wantName)
+	}
+	if got := displayWidth(firstColumn(header, mixedRow)); got != 40 {
+		t.Fatalf("mixed-width name cell width = %d, want 40 in %q", got, mixedRow)
+	}
+
+	headerStarts := columnStarts(header)
+	for _, row := range []string{mixedRow, shortRow} {
 		rowStarts := columnStarts(row)
 		if len(rowStarts) != len(headerStarts) {
 			t.Fatalf("active job row columns = %v, want %v in %q", rowStarts, headerStarts, row)
@@ -736,4 +832,81 @@ func displayWidth(text string) int {
 	}
 
 	return width
+}
+
+func trimDisplayToWidth(text string, width int) string {
+	if displayWidth(text) <= width {
+		return text
+	}
+	if width <= 3 {
+		return strings.Repeat(".", width)
+	}
+
+	target := width - 3
+	current := 0
+	var b strings.Builder
+	for len(text) > 0 {
+		r, size := utf8.DecodeRuneInString(text)
+		text = text[size:]
+
+		runeWidth := 1
+		if runeWidthForTest(r) == 2 {
+			runeWidth = 2
+		}
+		if current+runeWidth > target {
+			break
+		}
+		b.WriteRune(r)
+		current += runeWidth
+	}
+	b.WriteString("...")
+	return b.String()
+}
+
+func firstColumn(header string, row string) string {
+	starts := columnStarts(header)
+	if len(starts) < 2 {
+		return strings.TrimRight(row, " ")
+	}
+	return trimToDisplayWidth(row, starts[1]-2)
+}
+
+func trimToDisplayWidth(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+
+	current := 0
+	var b strings.Builder
+	for len(text) > 0 {
+		r, size := utf8.DecodeRuneInString(text)
+		text = text[size:]
+
+		runeWidth := runeWidthForTest(r)
+		if current+runeWidth > width {
+			break
+		}
+		b.WriteRune(r)
+		current += runeWidth
+	}
+	return strings.TrimRight(b.String(), " ")
+}
+
+func runeWidthForTest(r rune) int {
+	if r >= 0x1100 && (r <= 0x115f ||
+		r == 0x2329 ||
+		r == 0x232a ||
+		(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
+		(r >= 0xac00 && r <= 0xd7a3) ||
+		(r >= 0xf900 && r <= 0xfaff) ||
+		(r >= 0xfe10 && r <= 0xfe19) ||
+		(r >= 0xfe30 && r <= 0xfe6f) ||
+		(r >= 0xff00 && r <= 0xff60) ||
+		(r >= 0xffe0 && r <= 0xffe6) ||
+		(r >= 0x1f300 && r <= 0x1f64f) ||
+		(r >= 0x1f900 && r <= 0x1f9ff) ||
+		(r >= 0x20000 && r <= 0x3fffd)) {
+		return 2
+	}
+	return 1
 }

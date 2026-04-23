@@ -53,7 +53,7 @@ func TestSnapshotUISortsActiveJobsByName(t *testing.T) {
 		cfg:        config.JobConfig{Name: "MOVIE"},
 		key:        "/links/movie/feature.mkv",
 		sourcePath: "/source/movie/feature.mkv",
-		linkPath:   "/links/movie/feature.mkv",
+		linkPath:   "/links/movie/zeta-feature.mkv",
 		remoteDir:  "remote:movie/",
 		summary:    "movie summary",
 		active:     true,
@@ -73,9 +73,35 @@ func TestSnapshotUISortsActiveJobsByName(t *testing.T) {
 		if len(active) != 2 {
 			t.Fatalf("len(active) = %d, want 2", len(active))
 		}
-		if active[0].Name != "4K-REMUX" || active[1].Name != "MOVIE" {
-			t.Fatalf("active order = [%s %s], want [4K-REMUX MOVIE]", active[0].Name, active[1].Name)
+		if active[0].Name != "feature.mkv" || active[1].Name != "zeta-feature.mkv" {
+			t.Fatalf("active order = [%s %s], want [feature.mkv zeta-feature.mkv]", active[0].Name, active[1].Name)
 		}
+	}
+}
+
+func TestSnapshotUIUsesActiveFileBasenameInsteadOfConfigName(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.jobs["/links/remux/示例电影.S01E02.mkv"] = &jobRuntime{
+		cfg:        config.JobConfig{Name: "4K-REMUX"},
+		key:        "/links/remux/示例电影.S01E02.mkv",
+		sourcePath: "/source/remux/示例电影.S01E02.mkv",
+		linkPath:   "/links/remux/示例电影.S01E02.mkv",
+		remoteDir:  "remote:remux/",
+		summary:    "movie summary",
+		active:     true,
+	}
+
+	active, _, _ := s.snapshotUI()
+	if len(active) != 1 {
+		t.Fatalf("len(active) = %d, want 1", len(active))
+	}
+	if got, want := active[0].Name, "示例电影.S01E02.mkv"; got != want {
+		t.Fatalf("active[0].Name = %q, want %q", got, want)
+	}
+	if active[0].Name == "4K-REMUX" {
+		t.Fatalf("active[0].Name = %q, want basename instead of config name", active[0].Name)
 	}
 }
 

@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	activeJobNameWidth     = 16
+	activeJobNameMaxWidth  = 40
 	activeJobProgressWidth = 8
 	activeJobSpeedWidth    = 16
 	activeJobETAWidth      = 13
+	activeJobStateWidth    = 6
 	minActiveJobRows       = 10
 	minEventRows           = 10
 	minDashboardWidth      = 9
@@ -36,9 +37,6 @@ func RenderDashboard(now time.Time, active []JobStatus, events []EventRecord, wa
 
 func RenderDashboardWithWidth(now time.Time, active []JobStatus, events []EventRecord, waiting int, maxParallel int, width int) string {
 	summaryTitle, summaryBody := renderSummaryPanel(now, len(active), waiting, maxParallel)
-	jobsTitle, jobsBody := renderActiveJobsPanel(active)
-	eventsTitle, eventsBody := renderEventsPanel(now, events)
-
 	totalWidth := width
 	if totalWidth < minDashboardWidth {
 		totalWidth = minDashboardWidth
@@ -49,6 +47,9 @@ func RenderDashboardWithWidth(now time.Time, active []JobStatus, events []EventR
 		innerPanelWidth = 5
 		totalWidth = innerPanelWidth + 4
 	}
+
+	jobsTitle, jobsBody := renderActiveJobsPanel(active, innerPanelWidth)
+	eventsTitle, eventsBody := renderEventsPanel(now, events)
 
 	lines := renderPanel(summaryTitle, summaryBody, innerPanelWidth, 1)
 	lines = append(lines, "")
@@ -79,22 +80,36 @@ func renderSummaryPanel(now time.Time, activeCount int, waiting int, maxParallel
 	}
 }
 
-func renderActiveJobsPanel(active []JobStatus) (string, []string) {
+func renderActiveJobsPanel(active []JobStatus, panelWidth int) (string, []string) {
 	if len(active) == 0 {
 		return "活动任务", []string{"暂无活动任务"}
 	}
 
-	rows := []string{formatActiveJobRow("名称", "进度", "速度", "预计", "状态")}
+	nameWidth := activeJobNameColumnWidth(panelWidth)
+	rows := []string{formatActiveJobRow("名称", "进度", "速度", "预计", "状态", nameWidth)}
 	for _, job := range active {
 		progress, speed, eta, state := parseJobSummary(job.Summary)
-		rows = append(rows, formatActiveJobRow(job.Name, progress, speed, eta, state))
+		rows = append(rows, formatActiveJobRow(job.Name, progress, speed, eta, state, nameWidth))
 	}
 	return "活动任务", rows
 }
 
-func formatActiveJobRow(name string, progress string, speed string, eta string, state string) string {
+func activeJobNameColumnWidth(panelWidth int) int {
+	bodyWidth := panelWidth - 4
+	usedWidth := activeJobProgressWidth + activeJobSpeedWidth + activeJobETAWidth + activeJobStateWidth + 8
+	availableWidth := bodyWidth - usedWidth
+	if availableWidth < displayColumns("名称") {
+		return displayColumns("名称")
+	}
+	if availableWidth > activeJobNameMaxWidth {
+		return activeJobNameMaxWidth
+	}
+	return availableWidth
+}
+
+func formatActiveJobRow(name string, progress string, speed string, eta string, state string, nameWidth int) string {
 	return strings.Join([]string{
-		padDisplayCell(name, activeJobNameWidth),
+		fitDisplayColumns(name, nameWidth),
 		padDisplayCell(progress, activeJobProgressWidth),
 		padDisplayCell(speed, activeJobSpeedWidth),
 		padDisplayCell(eta, activeJobETAWidth),
