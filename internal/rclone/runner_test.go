@@ -41,6 +41,28 @@ func TestRunnerForwardsExecutorError(t *testing.T) {
 	}
 }
 
+func TestRunnerBuildsSingleFileCopyCommand(t *testing.T) {
+	t.Parallel()
+
+	exec := &RecordingExecutor{}
+	runner := NewRunner(exec)
+
+	extraArgs := []string{"--stats=1s", "--stats-one-line", "-v"}
+	if err := runner.CopyFile(context.Background(), "/links/movies/feature.mkv", "gd1:/sync/movies/", extraArgs); err != nil {
+		t.Fatalf("CopyFile() error = %v", err)
+	}
+
+	want := []string{"copy", "/links/movies/feature.mkv", "gd1:/sync/movies/", "--stats=1s", "--stats-one-line", "-v"}
+	if len(exec.Args) != len(want) {
+		t.Fatalf("command arg length = %d, want %d", len(exec.Args), len(want))
+	}
+	for i := range want {
+		if exec.Args[i] != want[i] {
+			t.Fatalf("command arg[%d] = %q, want %q", i, exec.Args[i], want[i])
+		}
+	}
+}
+
 type RecordingExecutor struct {
 	Args []string
 	Err  error

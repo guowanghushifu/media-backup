@@ -28,6 +28,27 @@ func ScanExistingAndLink(sourceDir, linkDir string, extensions []string, stableD
 	})
 }
 
+func ScanLinkedFiles(root string, extensions []string) ([]string, error) {
+	paths := make([]string, 0)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !hasExtension(path, extensions) {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
 func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func(path string) error) (int, error) {
 	var count int
 	cleanLinkDir := filepath.Clean(linkDir)

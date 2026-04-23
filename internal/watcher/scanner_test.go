@@ -3,6 +3,7 @@ package watcher
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -256,5 +257,43 @@ func TestScanAndLinkStillWaitsForStabilityDuration(t *testing.T) {
 	linkedMedia := filepath.Join(linkDir, "movie", "feature.mkv")
 	if _, err := os.Stat(linkedMedia); err != nil {
 		t.Fatalf("expected linked media file missing at %q: %v", linkedMedia, err)
+	}
+}
+
+func TestScanLinkedFilesReturnsEachUploadableFilePath(t *testing.T) {
+	t.Parallel()
+
+	linkDir := t.TempDir()
+	files := []string{
+		filepath.Join(linkDir, "movie", "feature.mkv"),
+		filepath.Join(linkDir, "show", "season-1", "episode-1.mp4"),
+		filepath.Join(linkDir, "show", "season-1", "notes.txt"),
+	}
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", file, err)
+		}
+		if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", file, err)
+		}
+	}
+
+	got, err := ScanLinkedFiles(linkDir, []string{".mkv", ".mp4"})
+	if err != nil {
+		t.Fatalf("ScanLinkedFiles() error = %v", err)
+	}
+
+	sort.Strings(got)
+	want := []string{
+		filepath.Join(linkDir, "movie", "feature.mkv"),
+		filepath.Join(linkDir, "show", "season-1", "episode-1.mp4"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ScanLinkedFiles() len = %d, want %d; got=%v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ScanLinkedFiles() path[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

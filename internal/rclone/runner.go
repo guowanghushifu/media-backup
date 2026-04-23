@@ -19,3 +19,9 @@ func (r *Runner) Copy(ctx context.Context, linkDir, remote string, extraArgs []s
 	args = append(args, extraArgs...)
 	return r.executor.Run(ctx, args)
 }
+
+func (r *Runner) CopyFile(ctx context.Context, linkFile, remoteDir string, extraArgs []string) error {
+	args := []string{"copy", linkFile, remoteDir}
+	args = append(args, extraArgs...)
+	return r.executor.Run(ctx, args)
+}

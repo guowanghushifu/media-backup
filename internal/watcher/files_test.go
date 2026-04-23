@@ -121,6 +121,48 @@ func TestCleanupLinkDirPreservesRoot(t *testing.T) {
 	}
 }
 
+func TestCleanupLinkedFileRemovesOnlyUploadedFileAndEmptyParents(t *testing.T) {
+	t.Parallel()
+
+	linkDir := t.TempDir()
+	uploadedFile := filepath.Join(linkDir, "show", "season-1", "episode-1.mkv")
+	keptFile := filepath.Join(linkDir, "show", "season-2", "episode-1.mkv")
+	rootFile := filepath.Join(linkDir, "keep.txt")
+
+	for _, file := range []string{uploadedFile, keptFile, rootFile} {
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", file, err)
+		}
+		if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", file, err)
+		}
+	}
+
+	if err := CleanupLinkedFile(linkDir, uploadedFile); err != nil {
+		t.Fatalf("CleanupLinkedFile() error = %v", err)
+	}
+
+	if _, err := os.Stat(uploadedFile); !os.IsNotExist(err) {
+		t.Fatalf("uploaded file still exists: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(uploadedFile)); !os.IsNotExist(err) {
+		t.Fatalf("empty parent dir still exists: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(filepath.Dir(uploadedFile))); err != nil {
+		t.Fatalf("non-empty ancestor dir was removed: %v", err)
+	}
+
+	if _, err := os.Stat(keptFile); err != nil {
+		t.Fatalf("kept file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(keptFile)); err != nil {
+		t.Fatalf("non-empty parent dir was removed: %v", err)
+	}
+	if _, err := os.Stat(linkDir); err != nil {
+		t.Fatalf("link root missing: %v", err)
+	}
+}
+
 func TestWaitStableReturnsAfterSizeStopsChanging(t *testing.T) {
 	t.Parallel()
 

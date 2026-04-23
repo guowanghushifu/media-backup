@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -36,6 +37,44 @@ func CleanupLinkDir(linkDir string) error {
 		}
 	}
 	return nil
+}
+
+func CleanupLinkedFile(linkDir, linkFile string) error {
+	if err := os.Remove(linkFile); err != nil {
+		return err
+	}
+
+	cleanRoot := filepath.Clean(linkDir)
+	current := filepath.Dir(linkFile)
+	for {
+		cleanCurrent := filepath.Clean(current)
+		if cleanCurrent == cleanRoot {
+			return nil
+		}
+		if !strings.HasPrefix(cleanCurrent, cleanRoot+string(filepath.Separator)) {
+			return nil
+		}
+
+		entries, err := os.ReadDir(cleanCurrent)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				current = filepath.Dir(cleanCurrent)
+				continue
+			}
+			return err
+		}
+		if len(entries) != 0 {
+			return nil
+		}
+		if err := os.Remove(cleanCurrent); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				current = filepath.Dir(cleanCurrent)
+				continue
+			}
+			return err
+		}
+		current = filepath.Dir(cleanCurrent)
+	}
 }
 
 func WaitStable(path string, stableFor time.Duration, pollInterval time.Duration) error {
