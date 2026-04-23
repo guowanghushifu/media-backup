@@ -1390,9 +1390,7 @@ func TestProcessFileInPlaceSamePathUpdateCancelsActiveUploadWithoutCleanupOrRetr
 	if _, ok := s.retryDue[linkPath]; ok {
 		t.Fatalf("retryDue[%q] exists, want superseded upload to skip retry wait", linkPath)
 	}
-	if ready := s.scheduler.Ready(); len(ready) != 1 || ready[0] != linkPath {
-		t.Fatalf("Ready() = %v, want latest same-path task queued", ready)
-	}
+	waitForReadyJob(t, s, linkPath)
 
 	current := s.taskForKey(linkPath)
 	if current == nil {
@@ -1488,9 +1486,7 @@ func TestProcessFileNewInodeSamePathReplacementCancelsActiveUploadAndRequeuesLat
 		t.Fatal("active upload was not canceled by same-path replacement")
 	}
 
-	if ready := s.scheduler.Ready(); len(ready) != 1 || ready[0] != linkPath {
-		t.Fatalf("Ready() = %v, want latest same-path task queued", ready)
-	}
+	waitForReadyJob(t, s, linkPath)
 
 	gotBytes, err := os.ReadFile(linkPath)
 	if err != nil {
@@ -1803,6 +1799,26 @@ func newTestService() *Service {
 		retryDue:          map[string]time.Time{},
 		wakeCh:            make(chan struct{}, 1),
 		uiWakeCh:          make(chan struct{}, 1),
+	}
+}
+
+func waitForReadyJob(t *testing.T, s *Service, want string) {
+	t.Helper()
+
+	timeout := time.After(time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		if ready := s.scheduler.Ready(); len(ready) == 1 && ready[0] == want {
+			return
+		}
+
+		select {
+		case <-timeout:
+			t.Fatalf("Ready() = %v, want latest same-path task queued", s.scheduler.Ready())
+		case <-tick.C:
+		}
 	}
 }
 
