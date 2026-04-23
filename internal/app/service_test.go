@@ -130,7 +130,13 @@ func TestHandleRcloneOutputLineRecordsParsedTransferEvent(t *testing.T) {
 
 	at := time.Date(2026, 4, 22, 17, 4, 17, 0, time.UTC)
 	s := newTestService()
-	job := &jobRuntime{cfg: config.JobConfig{Name: "movie"}, key: "/source"}
+	job := &jobRuntime{
+		cfg:        config.JobConfig{Name: "movie"},
+		key:        "/link/movie.mkv",
+		sourcePath: "/source/movie.mkv",
+		linkPath:   "/link/movie.mkv",
+		remoteDir:  "remote:movie/",
+	}
 
 	s.handleRcloneOutputLine(job, "2026/04/22 17:04:17 INFO  : THIS_IS_TEST/uploadtest.bin: Copied (new)", func() time.Time {
 		return at
@@ -151,7 +157,13 @@ func TestHandleRcloneOutputLineUpdatesSummaryForStatsWithoutRecentEvent(t *testi
 	t.Parallel()
 
 	s := newTestService()
-	job := &jobRuntime{cfg: config.JobConfig{Name: "movie"}, key: "/source"}
+	job := &jobRuntime{
+		cfg:        config.JobConfig{Name: "movie"},
+		key:        "/link/movie.mkv",
+		sourcePath: "/source/movie.mkv",
+		linkPath:   "/link/movie.mkv",
+		remoteDir:  "remote:movie/",
+	}
 
 	s.handleRcloneOutputLine(job, "2026/04/22 17:04:18 INFO  :       42 GiB / 100 GiB, 42%, 12 MiB/s, ETA 1h2m3s", func() time.Time {
 		t.Fatal("now() should not be called for stats lines")
@@ -580,7 +592,7 @@ func TestProcessFileRecordsQueueEventOnceForIdleJob(t *testing.T) {
 		cfg:       &config.Config{StableDuration: time.Millisecond, PollInterval: time.Millisecond, Extensions: []string{".mkv"}},
 		logger:    log.New(io.Discard, "", 0),
 		scheduler: queue.New(queue.Options{MaxParallel: 1}),
-		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
+		jobs:      map[string]*jobRuntime{},
 		now: func() time.Time {
 			return time.Date(2026, 4, 23, 10, 0, 1, 0, time.UTC)
 		},
@@ -665,7 +677,7 @@ func TestProcessFileRecordsQueueEventWhenDispatchStartsImmediately(t *testing.T)
 		cfg:       &config.Config{StableDuration: time.Millisecond, PollInterval: time.Millisecond, Extensions: []string{".mkv"}},
 		logger:    log.New(io.Discard, "", 0),
 		scheduler: queue.New(queue.Options{MaxParallel: 1}),
-		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
+		jobs:      map[string]*jobRuntime{},
 		retryDue:  map[string]time.Time{},
 		wakeCh:    make(chan struct{}, 1),
 		now: func() time.Time {
@@ -702,20 +714,28 @@ func TestProcessFileDoesNotRecordQueueEventWhilePendingRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir}
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movie"}
+	linkPath := filepath.Join(linkDir, "movie.mkv")
 	s := &Service{
 		cfg:       &config.Config{StableDuration: time.Millisecond, PollInterval: time.Millisecond, Extensions: []string{".mkv"}},
 		logger:    log.New(io.Discard, "", 0),
 		scheduler: queue.New(queue.Options{MaxParallel: 1}),
-		jobs:      map[string]*jobRuntime{job.SourceDir: {cfg: job, key: job.SourceDir}},
-		retryDue:  map[string]time.Time{},
-		wakeCh:    make(chan struct{}, 1),
+		jobs: map[string]*jobRuntime{
+			linkPath: {
+				cfg:        job,
+				key:        linkPath,
+				sourcePath: path,
+				linkPath:   linkPath,
+				remoteDir:  "remote:movie/",
+			},
+		},
+		retryDue: map[string]time.Time{},
+		wakeCh:   make(chan struct{}, 1),
 		now: func() time.Time {
 			return time.Date(2026, 4, 23, 10, 0, 8, 0, time.UTC)
 		},
 	}
 
-	linkPath := filepath.Join(linkDir, "movie.mkv")
 	s.scheduler.MarkDirty(linkPath)
 	if !s.scheduler.TryStart(linkPath) {
 		t.Fatal("TryStart() = false, want true")
@@ -775,13 +795,20 @@ func TestStartReadyUploadsRecordsDispatchStartEvent(t *testing.T) {
 	t.Parallel()
 
 	job := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link"}
+	linkPath := "/link/movie.mkv"
 	s := newTestService()
-	s.jobs[job.SourceDir] = &jobRuntime{cfg: job, key: job.SourceDir}
+	s.jobs[linkPath] = &jobRuntime{
+		cfg:        job,
+		key:        linkPath,
+		sourcePath: "/source/movie.mkv",
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+	}
 	s.now = func() time.Time {
 		return time.Date(2026, 4, 23, 10, 0, 3, 0, time.UTC)
 	}
 	s.startUpload = func(context.Context, *jobRuntime) {}
-	s.scheduler.MarkDirty(job.SourceDir)
+	s.scheduler.MarkDirty(linkPath)
 
 	s.startReadyUploads(context.Background())
 
@@ -835,10 +862,19 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		s.now = func() time.Time { return at }
 		s.copyJob = func(context.Context, *jobRuntime) error { return nil }
 		s.cleanupLinkDir = func(string) error { return nil }
+		linkPath := "/link/movie.mkv"
 		job := &jobRuntime{
-			cfg:    config.JobConfig{Name: "MOVIE", LinkDir: "/link"},
-			key:    "/source",
-			active: true,
+			cfg: config.JobConfig{
+				Name:         "MOVIE",
+				SourceDir:    "/source",
+				LinkDir:      "/link",
+				RcloneRemote: "remote:movie",
+			},
+			key:        linkPath,
+			sourcePath: "/source/movie.mkv",
+			linkPath:   linkPath,
+			remoteDir:  "remote:movie/",
+			active:     true,
 		}
 		s.jobs[job.key] = job
 		s.scheduler.MarkDirty(job.key)
@@ -873,6 +909,9 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		if got := s.recentEvents[0].message; got != "[MOVIE] 上传失败，进入重试等待" {
 			t.Fatalf("recentEvents[0].message = %q, want failure event", got)
 		}
+		if _, ok := s.retryDue[job.linkPath]; !ok {
+			t.Fatalf("retryDue missing file key %q", job.linkPath)
+		}
 	})
 
 	t.Run("cleanup failure enters retry", func(t *testing.T) {
@@ -887,6 +926,9 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 		if got := s.recentEvents[0].message; got != "[MOVIE] 上传失败，进入重试等待" {
 			t.Fatalf("recentEvents[0].message = %q, want cleanup failure retry event", got)
 		}
+		if _, ok := s.retryDue[job.linkPath]; !ok {
+			t.Fatalf("retryDue missing file key %q", job.linkPath)
+		}
 	})
 }
 
@@ -897,14 +939,26 @@ func TestRunUploadBindsRcloneOutputToJob(t *testing.T) {
 	s.now = func() time.Time {
 		return time.Date(2026, 4, 23, 10, 0, 8, 0, time.UTC)
 	}
+	linkPath := "/root/child/movie.mkv"
 	job := &jobRuntime{
-		cfg:    config.JobConfig{Name: "MOVIE", LinkDir: "/root/child"},
-		key:    "/source",
-		active: true,
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    "/source/child",
+			LinkDir:      "/root/child",
+			RcloneRemote: "remote:child",
+		},
+		key:        linkPath,
+		sourcePath: "/source/child/movie.mkv",
+		linkPath:   linkPath,
+		remoteDir:  "remote:child/",
+		active:     true,
 	}
-	s.jobs["/other"] = &jobRuntime{
-		cfg: config.JobConfig{Name: "OTHER", LinkDir: "/root"},
-		key: "/other",
+	s.jobs["/root/other/other.mkv"] = &jobRuntime{
+		cfg:        config.JobConfig{Name: "OTHER", SourceDir: "/other", LinkDir: "/root/other", RcloneRemote: "remote:other"},
+		key:        "/root/other/other.mkv",
+		sourcePath: "/other/other.mkv",
+		linkPath:   "/root/other/other.mkv",
+		remoteDir:  "remote:other/",
 	}
 	s.jobs[job.key] = job
 	s.copyJob = func(ctx context.Context, gotJob *jobRuntime) error {
@@ -948,11 +1002,15 @@ func TestRunUploadLogsRcloneCommand(t *testing.T) {
 	job := &jobRuntime{
 		cfg: config.JobConfig{
 			Name:         "MOVIE",
+			SourceDir:    "/dld/upload/Movie-2025",
 			LinkDir:      "/dld/gd_upload/Movie-2025",
 			RcloneRemote: "gd1:/sync/Movie/Movie-2025",
 		},
-		key:    "/source",
-		active: true,
+		key:        "/dld/gd_upload/Movie-2025/movie.mkv",
+		sourcePath: "/dld/upload/Movie-2025/movie.mkv",
+		linkPath:   "/dld/gd_upload/Movie-2025/movie.mkv",
+		remoteDir:  "gd1:/sync/Movie/Movie-2025/",
+		active:     true,
 	}
 	s.jobs[job.key] = job
 	s.scheduler.MarkDirty(job.key)
@@ -973,17 +1031,24 @@ func TestReleaseRetriesRecordsRequeueEvent(t *testing.T) {
 	t.Parallel()
 
 	job := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link"}
+	linkPath := "/link/movie.mkv"
 	s := newTestService()
 	s.now = func() time.Time {
 		return time.Date(2026, 4, 23, 10, 0, 7, 0, time.UTC)
 	}
-	s.jobs[job.SourceDir] = &jobRuntime{cfg: job, key: job.SourceDir}
-	s.scheduler.MarkDirty(job.SourceDir)
-	if !s.scheduler.TryStart(job.SourceDir) {
+	s.jobs[linkPath] = &jobRuntime{
+		cfg:        job,
+		key:        linkPath,
+		sourcePath: "/source/movie.mkv",
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+	}
+	s.scheduler.MarkDirty(linkPath)
+	if !s.scheduler.TryStart(linkPath) {
 		t.Fatal("TryStart() = false, want true")
 	}
-	s.scheduler.FinishFailed(job.SourceDir)
-	s.retryDue[job.SourceDir] = s.currentTime().Add(-time.Second)
+	s.scheduler.FinishFailed(linkPath)
+	s.retryDue[linkPath] = s.currentTime().Add(-time.Second)
 
 	s.releaseRetries()
 
@@ -999,17 +1064,24 @@ func TestReleaseRetriesDoesNotRecordEventBeforeDueTime(t *testing.T) {
 	t.Parallel()
 
 	job := config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link"}
+	linkPath := "/link/movie.mkv"
 	s := newTestService()
 	s.now = func() time.Time {
 		return time.Date(2026, 4, 23, 10, 0, 9, 0, time.UTC)
 	}
-	s.jobs[job.SourceDir] = &jobRuntime{cfg: job, key: job.SourceDir}
-	s.scheduler.MarkDirty(job.SourceDir)
-	if !s.scheduler.TryStart(job.SourceDir) {
+	s.jobs[linkPath] = &jobRuntime{
+		cfg:        job,
+		key:        linkPath,
+		sourcePath: "/source/movie.mkv",
+		linkPath:   linkPath,
+		remoteDir:  "remote:movie/",
+	}
+	s.scheduler.MarkDirty(linkPath)
+	if !s.scheduler.TryStart(linkPath) {
 		t.Fatal("TryStart() = false, want true")
 	}
-	s.scheduler.FinishFailed(job.SourceDir)
-	s.retryDue[job.SourceDir] = s.currentTime().Add(time.Minute)
+	s.scheduler.FinishFailed(linkPath)
+	s.retryDue[linkPath] = s.currentTime().Add(time.Minute)
 
 	s.releaseRetries()
 
