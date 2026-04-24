@@ -1,5 +1,7 @@
 .DS_Store
-dist/
+dist/media-backup-linux-amd64
+dist/media-backup-linux-arm64
+dist/config.yaml
 docs/superpowers/
 logs/
 .worktrees/
