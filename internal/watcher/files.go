@@ -1,7 +1,9 @@
 package watcher
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +12,10 @@ import (
 )
 
 var errLinkFileOutsideLinkDir = errors.New("link file is outside link dir")
+
+var ErrWaitStableTimeout = errors.New("file did not become stable before timeout")
+
+var stableWaitGrace = time.Minute
 
 func LinkFile(sourceDir, linkDir, sourceFile string) (string, error) {
 	rel, err := filepath.Rel(sourceDir, sourceFile)
@@ -141,8 +147,15 @@ func CleanupLinkedFile(linkDir, linkFile string) error {
 }
 
 func WaitStable(path string, stableFor time.Duration, pollInterval time.Duration) error {
+	return WaitStableContext(context.Background(), path, stableFor, pollInterval)
+}
+
+func WaitStableContext(ctx context.Context, path string, stableFor time.Duration, pollInterval time.Duration) error {
 	if pollInterval <= 0 {
 		pollInterval = 100 * time.Millisecond
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	info, err := os.Stat(path)
@@ -156,8 +169,23 @@ func WaitStable(path string, stableFor time.Duration, pollInterval time.Duration
 	}
 
 	stableSince := time.Now()
+	deadline := stableSince.Add(stableFor + stableWaitGrace)
 	for {
-		time.Sleep(pollInterval)
+		if !deadline.IsZero() && time.Now().Add(pollInterval).After(deadline) {
+			pollInterval = time.Until(deadline)
+			if pollInterval <= 0 {
+				return fmt.Errorf("%w: %s after %s", ErrWaitStableTimeout, path, stableFor+stableWaitGrace)
+			}
+		}
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 
 		info, err := os.Stat(path)
 		if err != nil {
@@ -172,6 +200,9 @@ func WaitStable(path string, stableFor time.Duration, pollInterval time.Duration
 		}
 		if time.Since(stableSince) >= stableFor {
 			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("%w: %s after %s", ErrWaitStableTimeout, path, stableFor+stableWaitGrace)
 		}
 	}
 }

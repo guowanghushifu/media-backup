@@ -24,6 +24,7 @@ import (
 
 const maxRecentEvents = 10
 const uiKeepaliveInterval = 3 * time.Second
+const maxParallelProcessing = 32
 
 var errUploadSuperseded = errors.New("upload superseded by newer same-path file")
 
@@ -35,12 +36,13 @@ type Service struct {
 	uiWriter           io.Writer
 	mkdirAll           func(string, os.FileMode) error
 	addWatches         func(string) error
-	scanExisting       func(string, string, []string, time.Duration) (int, error)
+	scanExisting       func(context.Context, string, string, []string, time.Duration) (int, error)
 	scanLinkedFiles    func(string, []string) ([]string, error)
 	copyJob            func(context.Context, *jobRuntime) error
 	cleanupLinkedFile  func(string, string) error
 	startUpload        func(context.Context, *jobRuntime)
 	afterMarkDirty     func(string)
+	beforeProcessFile  func(string)
 	now                func() time.Time
 	uiWidth            func() int
 	notifyFinalFailure func(jobFailureNotification) error
@@ -53,6 +55,7 @@ type Service struct {
 	recentEvents  []recentEvent
 	retryDue      map[string]time.Time
 	failureCounts map[string]int
+	processSem    chan struct{}
 	wakeCh        chan struct{}
 	uiWakeCh      chan struct{}
 }
@@ -108,7 +111,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		watcher:           fsWatcher,
 		uiWriter:          os.Stdout,
 		mkdirAll:          os.MkdirAll,
-		scanExisting:      watcher.ScanExistingAndLink,
+		scanExisting:      watcher.ScanExistingAndLinkContext,
 		scanLinkedFiles:   watcher.ScanLinkedFiles,
 		cleanupLinkedFile: watcher.CleanupLinkedFile,
 		now:               time.Now,
@@ -117,6 +120,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		processing:        map[string]struct{}{},
 		retryDue:          map[string]time.Time{},
 		failureCounts:     map[string]int{},
+		processSem:        make(chan struct{}, maxParallelProcessing),
 		wakeCh:            make(chan struct{}, 1),
 		uiWakeCh:          make(chan struct{}, 1),
 	}
@@ -160,7 +164,7 @@ func (s *Service) Run(ctx context.Context) error {
 		s.uiLoop(runCtx)
 	}()
 
-	if err := s.startupCatchUp(); err != nil {
+	if err := s.startupCatchUp(runCtx); err != nil {
 		cancel()
 		wg.Wait()
 		return err
@@ -182,7 +186,7 @@ func (s *Service) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (s *Service) startupCatchUp() error {
+func (s *Service) startupCatchUp(ctx context.Context) error {
 	for _, cfgJob := range s.configJobList() {
 		if err := s.mkdirAll(cfgJob.LinkDir, 0o755); err != nil {
 			return err
@@ -190,7 +194,7 @@ func (s *Service) startupCatchUp() error {
 		if err := s.addWatches(cfgJob.SourceDir); err != nil {
 			return err
 		}
-		scannedCount, err := s.scanExisting(cfgJob.SourceDir, cfgJob.LinkDir, s.cfg.Extensions, s.cfg.StableDuration)
+		scannedCount, err := s.scanExisting(ctx, cfgJob.SourceDir, cfgJob.LinkDir, s.cfg.Extensions, s.cfg.StableDuration)
 		if err != nil {
 			return err
 		}
@@ -309,7 +313,15 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 		s.mu.Unlock()
 	}()
 
-	if err := watcher.WaitStable(path, s.cfg.StableDuration, s.cfg.PollInterval); err != nil {
+	if !s.acquireProcessSlot(ctx) {
+		return
+	}
+	defer s.releaseProcessSlot()
+	if s.beforeProcessFile != nil {
+		s.beforeProcessFile(path)
+	}
+
+	if err := watcher.WaitStableContext(ctx, path, s.cfg.StableDuration, s.cfg.PollInterval); err != nil {
 		s.logger.Printf("wait stable %s: %v", path, err)
 		return
 	}
@@ -327,6 +339,25 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 		s.appendSchedulerEventNow(task, "检测到新文件，任务标记为待上传")
 	}
 	s.signalWake()
+}
+
+func (s *Service) acquireProcessSlot(ctx context.Context) bool {
+	if s.processSem == nil {
+		return true
+	}
+	select {
+	case s.processSem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *Service) releaseProcessSlot() {
+	if s.processSem == nil {
+		return
+	}
+	<-s.processSem
 }
 
 func (s *Service) registerTask(cfgJob config.JobConfig, sourcePath, linkPath string) (*jobRuntime, error) {
@@ -646,6 +677,7 @@ func (s *Service) finishUploadFailureLocked(job *jobRuntime, summary string) {
 	} else if current == job {
 		s.scheduler.Finish(job.key, false)
 		s.appendSchedulerEventNow(job, "上传失败，达到最大重试次数，停止重试")
+		s.removeTerminalFailedTask(job)
 		if err := s.notifyFinalFailure(jobFailureNotification{
 			JobName:    job.cfg.Name,
 			LinkPath:   job.linkPath,
@@ -658,6 +690,25 @@ func (s *Service) finishUploadFailureLocked(job *jobRuntime, summary string) {
 		s.scheduler.Finish(job.key, false)
 	}
 	s.signalWake()
+}
+
+func (s *Service) removeTerminalFailedTask(job *jobRuntime) bool {
+	if job == nil {
+		return false
+	}
+	if !s.scheduler.Forget(job.key) {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current := s.jobs[job.key]; current != nil && current != job {
+		return false
+	}
+	delete(s.jobs, job.key)
+	delete(s.retryDue, job.key)
+	delete(s.failureCounts, job.key)
+	return true
 }
 
 func (s *Service) finishUploadSuperseded(job *jobRuntime) {

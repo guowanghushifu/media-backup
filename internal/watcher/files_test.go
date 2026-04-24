@@ -1,6 +1,8 @@
 package watcher
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -319,5 +321,69 @@ func TestWaitStableReturnsAfterSizeStopsChanging(t *testing.T) {
 
 	if returnedAt.Sub(lastWriteAt) < stableFor-15*time.Millisecond {
 		t.Fatalf("WaitStable() returned too early: afterLastWrite=%v, stableFor=%v", returnedAt.Sub(lastWriteAt), stableFor)
+	}
+}
+
+func TestWaitStableContextReturnsOnCancel(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "growing.file")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := WaitStableContext(ctx, path, time.Hour, time.Hour)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitStableContext() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestWaitStableContextReturnsAfterMaxWait(t *testing.T) {
+	originalGrace := stableWaitGrace
+	stableWaitGrace = 30 * time.Millisecond
+	t.Cleanup(func() { stableWaitGrace = originalGrace })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "growing.file")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+				if err == nil {
+					_, _ = f.Write([]byte("x"))
+					_ = f.Close()
+				}
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	stableFor := 40 * time.Millisecond
+	start := time.Now()
+	err := WaitStableContext(context.Background(), path, stableFor, 5*time.Millisecond)
+	if !errors.Is(err, ErrWaitStableTimeout) {
+		t.Fatalf("WaitStableContext() error = %v, want ErrWaitStableTimeout", err)
+	}
+	if elapsed := time.Since(start); elapsed < stableFor+stableWaitGrace {
+		t.Fatalf("WaitStableContext() returned after %v, want at least %v", elapsed, stableFor+stableWaitGrace)
 	}
 }

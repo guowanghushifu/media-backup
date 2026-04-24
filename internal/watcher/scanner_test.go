@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -112,7 +113,7 @@ func TestScanExistingSkipsWaitForOldFiles(t *testing.T) {
 	})
 
 	waitCalls := 0
-	waitForScanStable = func(path string, stableFor time.Duration, pollInterval time.Duration) error {
+	waitForScanStable = func(ctx context.Context, path string, stableFor time.Duration, pollInterval time.Duration) error {
 		waitCalls++
 		return nil
 	}
@@ -167,7 +168,7 @@ func TestScanExistingWaitsForRecentlyModifiedFiles(t *testing.T) {
 		gotStableFor    time.Duration
 		gotPollInterval time.Duration
 	)
-	waitForScanStable = func(path string, stableFor time.Duration, pollInterval time.Duration) error {
+	waitForScanStable = func(ctx context.Context, path string, stableFor time.Duration, pollInterval time.Duration) error {
 		waitCalls++
 		gotPath = path
 		gotStableFor = stableFor
@@ -225,7 +226,7 @@ func TestScanAndLinkStillWaitsForStabilityDuration(t *testing.T) {
 		gotStableFor    time.Duration
 		gotPollInterval time.Duration
 	)
-	waitForScanStable = func(path string, stableFor time.Duration, pollInterval time.Duration) error {
+	waitForScanStable = func(ctx context.Context, path string, stableFor time.Duration, pollInterval time.Duration) error {
 		waitCalls++
 		gotPath = path
 		gotStableFor = stableFor

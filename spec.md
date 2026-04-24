@@ -98,6 +98,7 @@
 - `processing`：防止同一个源文件被多个 goroutine 重复处理。
 - `retryDue`：记录失败任务下次允许重试的时间。
 - `failureCounts`：记录每个硬链接路径的连续失败次数。
+- `processSem`：限制前置文件处理并发，当前固定最多 32 个文件同时执行稳定等待、硬链接和任务注册。
 - `wakeCh`：唤醒调度循环。
 - `uiWakeCh`：唤醒 UI 刷新。
 - Telegram notifier：仅在配置启用时创建。
@@ -131,7 +132,8 @@
 `ScanExistingAndLink` 的稳定性策略：
 
 - 对旧文件：如果文件修改时间早于 `stable_duration`，不再等待。
-- 对最近修改的文件：继续调用 `WaitStable` 等待大小稳定。
+- 对最近修改的文件：继续调用可取消的稳定等待逻辑，等待大小稳定。
+- 如果单个文件持续不稳定超过 `stable_duration + 1m`，启动扫描会跳过该文件并继续扫描后续文件。
 
 因此，启动时已有且看起来已经写完的文件会更快进入上传；刚写入或仍在写入的文件会等待稳定。
 
@@ -171,9 +173,11 @@
 3. 按 `poll_interval` 周期检查文件大小。
 4. 只要大小变化，就重置稳定开始时间。
 5. 大小持续不变达到 `stable_duration` 后返回成功。
-6. 检查过程中 `os.Stat` 失败会返回错误。
+6. 如果总等待时间超过 `stable_duration + 1m`，返回稳定等待超时错误。
+7. 如果服务 context 被取消，立即返回 context 错误。
+8. 检查过程中 `os.Stat` 失败会返回错误。
 
-如果 `poll_interval <= 0`，函数内部会使用 `100ms` 作为兜底值。
+如果 `poll_interval <= 0`，函数内部会使用 `100ms` 作为兜底值。运行期处理文件时，稳定等待超时只记录日志并释放该路径，后续文件继续变化产生 fsnotify 事件时会再次触发处理。
 
 ## 10. 硬链接实现
 
@@ -440,8 +444,9 @@ rclone 返回错误时：
 4. 如果达到最大重试次数：
    - 调用 `scheduler.Finish(key, false)`。
    - 记录“上传失败，达到最大重试次数，停止重试”。
+   - 清理该 key 的内存状态，包括运行时任务、失败计数、重试时间和调度器终态状态。
    - 如果启用 Telegram，发送最终失败通知。
-5. 失败时不会删除硬链接文件，因此后续重试仍可上传同一个硬链接文件。
+5. 失败时不会删除硬链接文件，因此未达到重试上限时后续重试仍可上传同一个硬链接文件；达到上限后硬链接文件保留，等待新事件或重启扫描重新注册。
 
 `max_retry_count = 0` 表示无限重试。对于大于 0 的值，当前实现中 `failures < max_retry_count` 时继续重试，达到该次数时停止。
 
@@ -585,6 +590,7 @@ Service 内部维护 `recentEvents`：
 
 - `Service.mu`：保护运行时任务表、processing、recentEvents、retryDue、failureCounts 等共享状态。
 - `Service.completionMu`：串行化任务注册、上传完成、失败和替换相关的关键路径，避免同路径更新和旧上传完成交错导致误清理。
+- `Service.processSem`：限制最多 32 个文件同时执行前置处理，避免大量不同文件事件同时进入稳定等待和硬链接阶段。
 - `queue.Scheduler.mu`：保护调度器内部状态。
 - `processing`：避免同一个源路径被多个事件同时处理。
 - `wakeCh` 和 `uiWakeCh` 都是容量 1 的 channel，发送时非阻塞；多个唤醒可合并，避免阻塞业务 goroutine。
@@ -659,7 +665,7 @@ rclone copy /dld/gd_upload/Movie-2025/A/movie.mkv gd1:/sync/Movie/Movie-2025/A/ 
 - 硬链接要求 `source_dir` 和 `link_dir` 所在文件系统支持 hard link；跨文件系统硬链接会失败。
 - 调度 key 是硬链接文件路径，因此同一路径更新会替换任务，不同路径文件互不影响。
 - 上传失败不会删除硬链接文件，保证可以重试。
-- 达到最大重试次数后任务会停止自动重试，但硬链接文件仍保留在 `link_dir`。
+- 达到最大重试次数后任务会停止自动重试，并释放内存状态，但硬链接文件仍保留在 `link_dir`。
 - 程序重启后会扫描 `link_dir`，这些遗留硬链接会再次注册为待上传任务。
 - Telegram 通知只在达到最大重试次数时发送；普通重试失败不发送。
 - rclone 输出解析依赖 `INFO  :`、`ETA`、`Copied (` 等文本特征，rclone 输出格式变化可能影响 UI 展示，但不影响上传命令本身。

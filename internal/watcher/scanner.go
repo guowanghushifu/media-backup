@@ -1,28 +1,44 @@
 package watcher
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-var waitForScanStable = WaitStable
+var waitForScanStable = func(ctx context.Context, path string, stableFor time.Duration, pollInterval time.Duration) error {
+	return WaitStableContext(ctx, path, stableFor, pollInterval)
+}
 
 func ScanAndLink(sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
+	return ScanAndLinkContext(context.Background(), sourceDir, linkDir, extensions, stableDuration)
+}
+
+func ScanAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
 	return scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
-		return waitForScanStable(path, stableDuration, time.Millisecond)
+		return waitForScanStable(ctx, path, stableDuration, time.Millisecond)
 	})
 }
 
 func ScanExistingAndLink(sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
+	return ScanExistingAndLinkContext(context.Background(), sourceDir, linkDir, extensions, stableDuration)
+}
+
+func ScanExistingAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
 	return scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
 		info, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
 		if stableDuration > 0 && time.Since(info.ModTime()) < stableDuration {
-			return waitForScanStable(path, stableDuration, time.Millisecond)
+			err := waitForScanStable(ctx, path, stableDuration, time.Millisecond)
+			if errors.Is(err, ErrWaitStableTimeout) {
+				return errSkipUnstableFile
+			}
+			return err
 		}
 		return nil
 	})
@@ -67,6 +83,9 @@ func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func
 		}
 		if beforeLink != nil {
 			if err := beforeLink(path); err != nil {
+				if errors.Is(err, errSkipUnstableFile) {
+					return nil
+				}
 				return err
 			}
 		}
@@ -78,6 +97,8 @@ func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func
 	})
 	return count, err
 }
+
+var errSkipUnstableFile = errors.New("skip unstable file")
 
 func hasExtension(path string, extensions []string) bool {
 	ext := strings.ToLower(filepath.Ext(path))

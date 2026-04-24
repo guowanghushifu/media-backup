@@ -442,7 +442,7 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 	s.addWatches = func(string) error {
 		return nil
 	}
-	s.scanExisting = func(string, string, []string, time.Duration) (int, error) {
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) {
 		close(scanStarted)
 		<-releaseScan
 		close(scanReturned)
@@ -524,7 +524,7 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	s.scanExisting = func(gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration) (int, error) {
+	s.scanExisting = func(ctx context.Context, gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration) (int, error) {
 		if gotSourceDir != sourceDir {
 			t.Fatalf("scanExisting sourceDir = %q, want %q", gotSourceDir, sourceDir)
 		}
@@ -572,7 +572,7 @@ func TestStartupCatchUpQueuesEachLinkedFileIndividually(t *testing.T) {
 	}
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
-	s.scanExisting = func(string, string, []string, time.Duration) (int, error) { return 0, nil }
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) { return 0, nil }
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{
 			filepath.Join(linkDir, "movie", "a.mkv"),
@@ -580,7 +580,7 @@ func TestStartupCatchUpQueuesEachLinkedFileIndividually(t *testing.T) {
 		}, nil
 	}
 
-	if err := s.startupCatchUp(); err != nil {
+	if err := s.startupCatchUp(context.Background()); err != nil {
 		t.Fatalf("startupCatchUp() error = %v", err)
 	}
 
@@ -617,12 +617,12 @@ func TestStartupCatchUpMarksJobDirtyWhenLinkDirHasPendingFiles(t *testing.T) {
 	}
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
-	s.scanExisting = func(string, string, []string, time.Duration) (int, error) { return 0, nil }
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) { return 0, nil }
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
 	}
 
-	if err := s.startupCatchUp(); err != nil {
+	if err := s.startupCatchUp(context.Background()); err != nil {
 		t.Fatalf("startupCatchUp() error = %v", err)
 	}
 
@@ -654,12 +654,12 @@ func TestStartupCatchUpRecordsSchedulerEventWhenExistingFilesQueued(t *testing.T
 	}
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
-	s.scanExisting = func(string, string, []string, time.Duration) (int, error) { return 3, nil }
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) { return 3, nil }
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
 	}
 
-	if err := s.startupCatchUp(); err != nil {
+	if err := s.startupCatchUp(context.Background()); err != nil {
 		t.Fatalf("startupCatchUp() error = %v", err)
 	}
 	if len(s.recentEvents) != 1 {
@@ -755,6 +755,140 @@ func TestProcessFileQueuesSiblingFilesAsIndependentTasks(t *testing.T) {
 		if _, ok := want[key]; !ok {
 			t.Fatalf("Ready() contains unexpected key %q (all=%v)", key, ready)
 		}
+	}
+}
+
+func TestProcessFileLimitsConcurrentProcessing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	fileA := filepath.Join(sourceDir, "a.mkv")
+	fileB := filepath.Join(sourceDir, "b.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{fileA, fileB} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movies"}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Millisecond
+	s.cfg.PollInterval = time.Millisecond
+	s.processSem = make(chan struct{}, 1)
+
+	entered := make(chan string, 2)
+	releaseFirst := make(chan struct{})
+	s.beforeProcessFile = func(path string) {
+		entered <- path
+		if path == fileA {
+			<-releaseFirst
+		}
+	}
+
+	doneA := make(chan struct{})
+	doneB := make(chan struct{})
+	go func() {
+		defer close(doneA)
+		s.processFile(context.Background(), job, fileA)
+	}()
+	select {
+	case got := <-entered:
+		if got != fileA {
+			t.Fatalf("first entered path = %q, want %q", got, fileA)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first processFile to enter")
+	}
+
+	go func() {
+		defer close(doneB)
+		s.processFile(context.Background(), job, fileB)
+	}()
+	select {
+	case got := <-entered:
+		t.Fatalf("second processFile entered while semaphore held: %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	select {
+	case got := <-entered:
+		if got != fileB {
+			t.Fatalf("second entered path = %q, want %q", got, fileB)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second processFile to enter")
+	}
+	<-doneA
+	<-doneB
+}
+
+func TestProcessFileDropsDuplicatePathBeforeWaitingForProcessingSlot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	path := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movies"}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Millisecond
+	s.cfg.PollInterval = time.Millisecond
+	s.processSem = make(chan struct{}, 1)
+
+	entered := make(chan struct{}, 2)
+	releaseFirst := make(chan struct{})
+	s.beforeProcessFile = func(string) {
+		entered <- struct{}{}
+		<-releaseFirst
+	}
+
+	doneFirst := make(chan struct{})
+	go func() {
+		defer close(doneFirst)
+		s.processFile(context.Background(), job, path)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first processFile to enter")
+	}
+
+	doneDuplicate := make(chan struct{})
+	go func() {
+		defer close(doneDuplicate)
+		s.processFile(context.Background(), job, path)
+	}()
+
+	select {
+	case <-doneDuplicate:
+	case <-time.After(time.Second):
+		close(releaseFirst)
+		<-doneFirst
+		t.Fatal("duplicate same-path processFile waited for semaphore instead of returning")
+	}
+
+	close(releaseFirst)
+	<-doneFirst
+
+	select {
+	case <-entered:
+		t.Fatal("duplicate same-path processFile reached processing hook")
+	default:
 	}
 }
 
@@ -1670,8 +1804,8 @@ func TestRunUploadFailureAtRetryLimitStopsRetryAndNotifies(t *testing.T) {
 
 	s.runUpload(context.Background(), job)
 
-	if got := s.failureCounts[job.key]; got != 2 {
-		t.Fatalf("failureCounts[%q] = %d, want 2", job.key, got)
+	if _, ok := s.failureCounts[job.key]; ok {
+		t.Fatalf("failureCounts[%q] still exists after terminal failure", job.key)
 	}
 	if _, ok := s.retryDue[job.key]; ok {
 		t.Fatalf("retryDue[%q] exists, want retry to stop at limit", job.key)
@@ -1682,8 +1816,50 @@ func TestRunUploadFailureAtRetryLimitStopsRetryAndNotifies(t *testing.T) {
 	if notified.LinkPath != job.linkPath {
 		t.Fatalf("notified.LinkPath = %q, want %q", notified.LinkPath, job.linkPath)
 	}
+	if notified.RetryCount != 2 {
+		t.Fatalf("notified.RetryCount = %d, want 2", notified.RetryCount)
+	}
 	if got := s.recentEvents[len(s.recentEvents)-1].message; got != "[MOVIE] movie.mkv｜上传失败，达到最大重试次数，停止重试" {
 		t.Fatalf("recentEvents[last].message = %q, want retry-limit event", got)
+	}
+}
+
+func TestRunUploadFailureAtRetryLimitClearsTerminalState(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.cfg.MaxRetryCount = 1
+	s.copyJob = func(context.Context, *jobRuntime) error { return errors.New("copy failed") }
+
+	job := &jobRuntime{
+		cfg:        config.JobConfig{Name: "MOVIE", SourceDir: "/source", LinkDir: "/link", RcloneRemote: "remote:movie"},
+		key:        "/link/movie.mkv",
+		sourcePath: "/source/movie.mkv",
+		linkPath:   "/link/movie.mkv",
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.failureCounts[job.key] = 0
+	s.retryDue[job.key] = time.Now().Add(time.Minute)
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if _, ok := s.jobs[job.key]; ok {
+		t.Fatalf("jobs[%q] still exists after terminal failure", job.key)
+	}
+	if _, ok := s.failureCounts[job.key]; ok {
+		t.Fatalf("failureCounts[%q] still exists after terminal failure", job.key)
+	}
+	if _, ok := s.retryDue[job.key]; ok {
+		t.Fatalf("retryDue[%q] still exists after terminal failure", job.key)
+	}
+	if s.scheduler.Forget(job.key) {
+		t.Fatalf("scheduler.Forget(%q) = true, want scheduler state already forgotten", job.key)
 	}
 }
 
