@@ -39,7 +39,7 @@ func TestInstallScriptDefaultInstallsServiceFromSiblingBinary(t *testing.T) {
 	}
 
 	scriptPath := filepath.Join(tempDir, "install-systemd-service.sh")
-	contents, err := os.ReadFile(filepath.Join("..", "..", "install-systemd-service.sh"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "dist", "install-systemd-service.sh"))
 	if err != nil {
 		t.Fatalf("ReadFile(script) error = %v", err)
 	}
@@ -125,7 +125,7 @@ func TestInstallScriptInstallsArm64BinaryWhenHostIsArm64(t *testing.T) {
 	}
 
 	scriptPath := filepath.Join(tempDir, "install-systemd-service.sh")
-	contents, err := os.ReadFile(filepath.Join("..", "..", "install-systemd-service.sh"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "dist", "install-systemd-service.sh"))
 	if err != nil {
 		t.Fatalf("ReadFile(script) error = %v", err)
 	}
@@ -174,7 +174,7 @@ func TestInstallScriptFailsWhenRequiredArchBinaryMissing(t *testing.T) {
 	}
 
 	scriptPath := filepath.Join(tempDir, "install-systemd-service.sh")
-	contents, err := os.ReadFile(filepath.Join("..", "..", "install-systemd-service.sh"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "dist", "install-systemd-service.sh"))
 	if err != nil {
 		t.Fatalf("ReadFile(script) error = %v", err)
 	}
@@ -222,7 +222,7 @@ func TestInstallScriptReportsAlreadyInstalledWithoutReinstalling(t *testing.T) {
 	}
 
 	scriptPath := filepath.Join(tempDir, "install-systemd-service.sh")
-	contents, err := os.ReadFile(filepath.Join("..", "..", "install-systemd-service.sh"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "dist", "install-systemd-service.sh"))
 	if err != nil {
 		t.Fatalf("ReadFile(script) error = %v", err)
 	}
@@ -278,7 +278,7 @@ func TestInstallScriptUninstallsService(t *testing.T) {
 	}
 
 	scriptPath := filepath.Join(tempDir, "install-systemd-service.sh")
-	contents, err := os.ReadFile(filepath.Join("..", "..", "install-systemd-service.sh"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "dist", "install-systemd-service.sh"))
 	if err != nil {
 		t.Fatalf("ReadFile(script) error = %v", err)
 	}
@@ -348,7 +348,7 @@ func TestInstallScriptRestartsServiceWithThirtySecondDelay(t *testing.T) {
 	}
 
 	scriptPath := filepath.Join(tempDir, "install-systemd-service.sh")
-	contents, err := os.ReadFile(filepath.Join("..", "..", "install-systemd-service.sh"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "dist", "install-systemd-service.sh"))
 	if err != nil {
 		t.Fatalf("ReadFile(script) error = %v", err)
 	}
@@ -412,7 +412,7 @@ func TestInstallScriptRestartFailsWhenServiceIsNotInstalled(t *testing.T) {
 	}
 
 	scriptPath := filepath.Join(tempDir, "install-systemd-service.sh")
-	contents, err := os.ReadFile(filepath.Join("..", "..", "install-systemd-service.sh"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "dist", "install-systemd-service.sh"))
 	if err != nil {
 		t.Fatalf("ReadFile(script) error = %v", err)
 	}

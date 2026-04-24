@@ -5,6 +5,8 @@ VERSION="${VERSION:-}"
 GO_BIN="${GO_BIN:-go}"
 DIST_DIR="${DIST_DIR:-dist}"
 BUILD_TMP_DIR="${BUILD_TMP_DIR:-${DIST_DIR}/.tmp}"
+INSTALL_SYSTEMD_SCRIPT="${INSTALL_SYSTEMD_SCRIPT:-dist/install-systemd-service.sh}"
+RUN_FOREVER_SCRIPT="${RUN_FOREVER_SCRIPT:-dist/run-forever.sh}"
 
 if [[ -z "${VERSION}" ]]; then
   echo "VERSION is required, for example: VERSION=v0.3.0 ./ci_build.sh" >&2
@@ -12,6 +14,8 @@ if [[ -z "${VERSION}" ]]; then
 fi
 
 version_without_v="${VERSION#v}"
+install_systemd_contents="$(cat "${INSTALL_SYSTEMD_SCRIPT}")"
+run_forever_contents="$(cat "${RUN_FOREVER_SCRIPT}")"
 rm -rf "${DIST_DIR}" "${BUILD_TMP_DIR}"
 mkdir -p "${DIST_DIR}" "${BUILD_TMP_DIR}"
 
@@ -23,9 +27,10 @@ build_archive() {
 
   mkdir -p "${stage_dir}"
   CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" "${GO_BIN}" build -trimpath -ldflags='-s -w' -o "${stage_dir}/${binary_name}" ./cmd/media-backup
-  cp install-systemd-service.sh "${stage_dir}/install-systemd-service.sh"
-  chmod +x "${stage_dir}/${binary_name}" "${stage_dir}/install-systemd-service.sh"
-  tar -C "${stage_dir}" -czf "${archive_path}" "${binary_name}" install-systemd-service.sh
+  printf '%s\n' "${install_systemd_contents}" > "${stage_dir}/install-systemd-service.sh"
+  printf '%s\n' "${run_forever_contents}" > "${stage_dir}/run-forever.sh"
+  chmod +x "${stage_dir}/${binary_name}" "${stage_dir}/install-systemd-service.sh" "${stage_dir}/run-forever.sh"
+  tar -C "${stage_dir}" -czf "${archive_path}" "${binary_name}" install-systemd-service.sh run-forever.sh
 }
 
 build_archive amd64
