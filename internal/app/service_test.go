@@ -1877,7 +1877,7 @@ func TestNewTelegramNotifierUsesBoundedHTTPTimeout(t *testing.T) {
 		Enabled:  true,
 		BotToken: "token",
 		ChatID:   "chat",
-	})
+	}, config.ProxyConfig{})
 	if n == nil {
 		t.Fatal("newTelegramNotifier() = nil, want notifier")
 	}
@@ -1889,6 +1889,51 @@ func TestNewTelegramNotifierUsesBoundedHTTPTimeout(t *testing.T) {
 	}
 	if n.client.Timeout != telegramNotifyTimeout {
 		t.Fatalf("client.Timeout = %v, want %v", n.client.Timeout, telegramNotifyTimeout)
+	}
+}
+
+func TestNewTelegramNotifierUsesConfiguredProxy(t *testing.T) {
+	t.Parallel()
+
+	n := newTelegramNotifier(config.TelegramConfig{
+		Enabled:  true,
+		BotToken: "token",
+		ChatID:   "chat",
+	}, config.ProxyConfig{
+		Enabled:  true,
+		Scheme:   "http",
+		Host:     "127.0.0.1",
+		Port:     7890,
+		Username: "demo@user",
+		Password: "p@ss:word",
+	})
+	if n == nil {
+		t.Fatal("newTelegramNotifier() = nil, want notifier")
+	}
+
+	transport, ok := n.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("client.Transport = %T, want *http.Transport", n.client.Transport)
+	}
+	if transport.Proxy == nil {
+		t.Fatal("transport.Proxy = nil, want configured proxy")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://api.telegram.org/bottoken/sendMessage", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, err := transport.Proxy(req)
+	if err != nil {
+		t.Fatalf("transport.Proxy() error = %v", err)
+	}
+	if proxyURL == nil {
+		t.Fatal("transport.Proxy() = nil, want proxy URL")
+	}
+
+	want := "http://demo%40user:p%40ss%3Aword@127.0.0.1:7890"
+	if proxyURL.String() != want {
+		t.Fatalf("proxyURL = %q, want %q", proxyURL.String(), want)
 	}
 }
 

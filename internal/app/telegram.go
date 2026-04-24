@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/guowanghushifu/media-backup/internal/config"
@@ -26,15 +29,36 @@ type telegramNotifier struct {
 	chatID   string
 }
 
-func newTelegramNotifier(cfg config.TelegramConfig) *telegramNotifier {
+func newTelegramNotifier(cfg config.TelegramConfig, proxy config.ProxyConfig) *telegramNotifier {
 	if !cfg.Enabled {
 		return nil
 	}
+	client := &http.Client{Timeout: telegramNotifyTimeout}
+	if proxyURL := telegramProxyURL(proxy); proxyURL != nil {
+		client.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	}
 	return &telegramNotifier{
-		client:   &http.Client{Timeout: telegramNotifyTimeout},
+		client:   client,
 		botToken: cfg.BotToken,
 		chatID:   cfg.ChatID,
 	}
+}
+
+func telegramProxyURL(proxy config.ProxyConfig) *url.URL {
+	if !proxy.Enabled {
+		return nil
+	}
+	u := &url.URL{
+		Scheme: proxy.Scheme,
+		Host:   net.JoinHostPort(proxy.Host, strconv.Itoa(proxy.Port)),
+	}
+	switch {
+	case proxy.Username != "" && proxy.Password != "":
+		u.User = url.UserPassword(proxy.Username, proxy.Password)
+	case proxy.Username != "":
+		u.User = url.User(proxy.Username)
+	}
+	return u
 }
 
 func (n *telegramNotifier) NotifyFinalFailure(ctx context.Context, event jobFailureNotification) error {

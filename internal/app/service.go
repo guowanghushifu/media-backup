@@ -99,7 +99,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	notifier := newTelegramNotifier(cfg.Telegram)
+	notifier := newTelegramNotifier(cfg.Telegram, cfg.Proxy)
 
 	s := &Service{
 		cfg:               cfg,
