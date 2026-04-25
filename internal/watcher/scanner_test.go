@@ -88,6 +88,43 @@ func TestScanSkipsLinkDirWhenNestedUnderSource(t *testing.T) {
 	}
 }
 
+func TestScanAndLinkSkipsSymlinkSourceFile(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	targetPath := filepath.Join(root, "outside.mkv")
+	symlinkPath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	originalWaitForScanStable := waitForScanStable
+	t.Cleanup(func() {
+		waitForScanStable = originalWaitForScanStable
+	})
+	waitForScanStable = func(ctx context.Context, path string, stableFor time.Duration, pollInterval time.Duration) error {
+		t.Fatalf("waitForScanStable called for symlink path %q", path)
+		return nil
+	}
+
+	count, err := ScanAndLinkContext(context.Background(), sourceDir, linkDir, []string{".mkv"}, time.Millisecond, time.Millisecond)
+	if err != nil {
+		t.Fatalf("ScanAndLinkContext() error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("ScanAndLinkContext() count = %d, want 0", count)
+	}
+	if _, err := os.Lstat(filepath.Join(linkDir, "movie.mkv")); !os.IsNotExist(err) {
+		t.Fatalf("expected no linked symlink, got err=%v", err)
+	}
+}
+
 func TestScanAndLinkContinuesAfterSingleFileLinkError(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
@@ -323,5 +360,31 @@ func TestScanLinkedFilesReturnsEachUploadableFilePath(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("ScanLinkedFiles() path[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestScanLinkedFilesSkipsSymlink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	linkDir := filepath.Join(root, "link")
+	targetPath := filepath.Join(root, "outside.mkv")
+	symlinkPath := filepath.Join(linkDir, "movie.mkv")
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ScanLinkedFiles(linkDir, []string{".mkv"})
+	if err != nil {
+		t.Fatalf("ScanLinkedFiles() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ScanLinkedFiles() = %v, want no symlink paths", got)
 	}
 }

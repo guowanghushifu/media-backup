@@ -42,6 +42,7 @@ type Service struct {
 	copyJob            func(context.Context, *jobRuntime) error
 	cleanupLinkedFile  func(string, string) error
 	cleanupSourceFile  func(string, string) error
+	validateLinkedFile func(string, string) error
 	waitStable         func(context.Context, string, time.Duration, time.Duration) error
 	startUpload        func(context.Context, *jobRuntime)
 	afterMarkDirty     func(string)
@@ -109,26 +110,27 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	notifier := newTelegramNotifier(cfg.Telegram, cfg.Proxy)
 
 	s := &Service{
-		cfg:               cfg,
-		logger:            logger,
-		scheduler:         queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads}),
-		watcher:           fsWatcher,
-		uiWriter:          os.Stdout,
-		mkdirAll:          os.MkdirAll,
-		scanExisting:      watcher.ScanExistingAndLinkContext,
-		scanExistingFiles: watcher.ScanExistingAndLinkFilesContext,
-		scanLinkedFiles:   watcher.ScanLinkedFiles,
-		cleanupLinkedFile: watcher.CleanupLinkedFile,
-		cleanupSourceFile: watcher.CleanupSourceFile,
-		now:               time.Now,
-		configJobs:        make(map[string]config.JobConfig, len(cfg.Jobs)),
-		jobs:              make(map[string]*jobRuntime),
-		processing:        map[string]struct{}{},
-		retryDue:          map[string]time.Time{},
-		failureCounts:     map[string]int{},
-		processSem:        make(chan struct{}, maxParallelProcessing),
-		wakeCh:            make(chan struct{}, 1),
-		uiWakeCh:          make(chan struct{}, 1),
+		cfg:                cfg,
+		logger:             logger,
+		scheduler:          queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads}),
+		watcher:            fsWatcher,
+		uiWriter:           os.Stdout,
+		mkdirAll:           os.MkdirAll,
+		scanExisting:       watcher.ScanExistingAndLinkContext,
+		scanExistingFiles:  watcher.ScanExistingAndLinkFilesContext,
+		scanLinkedFiles:    watcher.ScanLinkedFiles,
+		cleanupLinkedFile:  watcher.CleanupLinkedFile,
+		cleanupSourceFile:  watcher.CleanupSourceFile,
+		validateLinkedFile: watcher.ValidateLinkedFile,
+		now:                time.Now,
+		configJobs:         make(map[string]config.JobConfig, len(cfg.Jobs)),
+		jobs:               make(map[string]*jobRuntime),
+		processing:         map[string]struct{}{},
+		retryDue:           map[string]time.Time{},
+		failureCounts:      map[string]int{},
+		processSem:         make(chan struct{}, maxParallelProcessing),
+		wakeCh:             make(chan struct{}, 1),
+		uiWakeCh:           make(chan struct{}, 1),
 	}
 	s.addWatches = s.addRecursiveWatches
 	s.copyJob = s.copyWithRclone
@@ -546,6 +548,13 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 func (s *Service) registerTaskByLinkPath(cfgJob config.JobConfig, linkPath string) (*jobRuntime, error) {
 	sourcePath, err := sourcePathFromLinkedPath(cfgJob.SourceDir, cfgJob.LinkDir, linkPath)
 	if err != nil {
+		return nil, err
+	}
+	validateLinkedFile := s.validateLinkedFile
+	if validateLinkedFile == nil {
+		validateLinkedFile = watcher.ValidateLinkedFile
+	}
+	if err := validateLinkedFile(sourcePath, linkPath); err != nil {
 		return nil, err
 	}
 	return s.registerTask(cfgJob, sourcePath, linkPath)

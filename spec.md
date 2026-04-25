@@ -182,7 +182,7 @@
 5. 大小持续不变达到 `stable_duration` 后返回成功。
 6. 如果总等待时间超过 24 小时，返回稳定等待超时错误。
 7. 如果服务 context 被取消，立即返回 context 错误。
-8. 检查过程中 `os.Stat` 失败会返回错误。
+8. 检查过程中使用 `os.Lstat`，不会跟随 symlink；如果路径不是普通文件，或 `Lstat` 失败，会返回错误。
 
 如果 `poll_interval <= 0`，函数内部会使用 `100ms` 作为兜底值。运行期处理文件时，稳定等待不占用 `processSem`；单个文件持续不稳定超过 24 小时后会记录日志并放弃本次处理。
 
@@ -190,14 +190,16 @@
 
 上传路径准备逻辑在 `watcher.LinkFile` 或等价 helper 中实现：
 
-1. 如果 `linkDir` 为空或等于 `sourceDir`，不调用 `os.Link`，直接返回源文件路径作为 `uploadPath`，并标记为直传源文件模式。
-2. 否则计算 `sourceFile` 相对于 `sourceDir` 的相对路径。
-3. 将相对路径拼到 `linkDir` 下，得到 `linkPath`。
-4. 创建 `linkPath` 的父目录。
-5. 调用 `os.Link(sourceFile, linkPath)` 创建硬链接，并返回 `linkPath` 作为 `uploadPath`。
+1. 先用 `os.Lstat` 校验 `sourceFile` 是普通文件；硬链接本身也是普通文件，因此允许。symlink、device、fifo、socket 等非普通文件不处理。
+2. 如果 `linkDir` 为空或等于 `sourceDir`，不调用 `os.Link`，直接返回源文件路径作为 `uploadPath`，并标记为直传源文件模式。
+3. 否则计算 `sourceFile` 相对于 `sourceDir` 的相对路径。
+4. 将相对路径拼到 `linkDir` 下，得到 `linkPath`。
+5. 创建 `linkPath` 的父目录。
+6. 调用 `os.Link(sourceFile, linkPath)` 创建硬链接，并返回 `linkPath` 作为 `uploadPath`。
 
 独立 `link_dir` 模式下，如果目标路径已存在：
 
+- 先用 `os.Lstat` 校验目标路径也是普通文件，不跟随 symlink。
 - 若目标与源文件是同一个 inode，认为已经链接成功，直接返回。
 - 若目标存在但不是同一个文件，认为同路径源文件可能被替换，调用 `replaceHardLink`：
   - 先创建指向新源文件的临时硬链接。
@@ -213,14 +215,16 @@
 `watcher.ScanExistingAndLink` 和 `watcher.ScanAndLink` 都基于 `scanAndLink`：
 
 - 使用 `filepath.WalkDir` 递归遍历 `source_dir`。
-- 只处理普通文件，目录继续递归。
+- 使用 `os.Lstat` 只处理普通文件，目录继续递归；硬链接属于普通文件，会正常处理。symlink、device、fifo、socket 等非普通文件会被跳过。
 - 配置层不允许 `link_dir` 嵌套在 `source_dir` 内部，除非二者相等。扫描层仍应把非直传模式下的 `link_dir` 作为防御性跳过目录，避免异常配置或历史目录导致自递归处理。
 - 扩展名比较不区分大小写。
 - 处理文件前可执行稳定性等待。
 - 独立 `link_dir` 模式下，对匹配文件调用 `LinkFile`；直传源文件模式下，直接返回源文件作为待上传文件。
 - 单个路径的 `WalkDir` 错误、稳定性检查错误或 `LinkFile` 错误会被记录到聚合错误中，但不会中断其他文件扫描；context 取消除外。
 
-`ScanLinkedFiles` 则递归扫描独立 `link_dir`，返回所有允许扩展名的待上传文件路径。单个路径扫描错误会被记录到聚合错误中，并继续扫描其他路径。直传源文件模式不扫描 `link_dir`。
+`ScanLinkedFiles` 则递归扫描独立 `link_dir`，只返回允许扩展名的普通文件路径。单个路径扫描错误会被记录到聚合错误中，并继续扫描其他路径。直传源文件模式不扫描 `link_dir`。
+
+启动补偿扫描注册 `link_dir` 遗留文件前，会根据相对路径计算对应的 `source_dir` 源文件，并校验源文件和 link 文件都是普通文件且 `os.SameFile(source, link)` 为真。校验失败的遗留文件不会注册为上传任务，但错误会被记录并聚合返回。
 
 ## 12. 远端目录映射
 

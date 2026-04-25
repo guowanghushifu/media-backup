@@ -38,7 +38,7 @@ func ScanExistingAndLinkContext(ctx context.Context, sourceDir, linkDir string, 
 
 func ScanExistingAndLinkFilesContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration, pollInterval time.Duration) ([]LinkResult, error) {
 	return scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
-		info, err := os.Stat(path)
+		info, err := regularFileInfo(path)
 		if err != nil {
 			return err
 		}
@@ -61,6 +61,9 @@ func ScanLinkedFiles(root string, extensions []string) ([]string, error) {
 			return nil
 		}
 		if !hasExtension(path, extensions) {
+			return nil
+		}
+		if !isRegularPath(path, &errs) {
 			return nil
 		}
 		paths = append(paths, path)
@@ -90,6 +93,9 @@ func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func
 		if !hasExtension(path, extensions) {
 			return nil
 		}
+		if !isRegularPath(path, &errs) {
+			return nil
+		}
 		if beforeLink != nil {
 			if err := beforeLink(path); err != nil {
 				if errors.Is(err, errSkipUnstableFile) {
@@ -117,6 +123,17 @@ func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func
 }
 
 var errSkipUnstableFile = errors.New("skip unstable file")
+
+func isRegularPath(path string, errs *[]error) bool {
+	if _, err := regularFileInfo(path); err != nil {
+		if errors.Is(err, ErrNonRegularFile) {
+			return false
+		}
+		*errs = append(*errs, fmt.Errorf("%s: %w", path, err))
+		return false
+	}
+	return true
+}
 
 func isContextError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)

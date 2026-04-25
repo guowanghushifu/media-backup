@@ -629,6 +629,7 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 			filepath.Join(linkDir, "b.mkv"),
 		}, nil
 	}
+	s.validateLinkedFile = func(string, string) error { return nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.scanExisting = func(ctx context.Context, gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration, gotPollInterval time.Duration) (int, error) {
@@ -708,6 +709,69 @@ func TestStartupCatchUpQueuesEachLinkedFileIndividually(t *testing.T) {
 		if _, ok := want[key]; !ok {
 			t.Fatalf("Ready() contains unexpected key %q (all=%v)", key, ready)
 		}
+	}
+}
+
+func TestStartupCatchUpRegistersOnlyVerifiedHardLinksFromLinkDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	goodSource := filepath.Join(sourceDir, "good.mkv")
+	copySource := filepath.Join(sourceDir, "copy.mkv")
+	symlinkSource := filepath.Join(sourceDir, "symlink.mkv")
+	goodLink := filepath.Join(linkDir, "good.mkv")
+	copyLink := filepath.Join(linkDir, "copy.mkv")
+	symlinkLink := filepath.Join(linkDir, "symlink.mkv")
+	outsidePath := filepath.Join(root, "outside.mkv")
+	for _, dir := range []string{sourceDir, linkDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{goodSource, copySource, symlinkSource, outsidePath} {
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Link(goodSource, goodLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(copyLink, []byte("copied but not hardlinked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsidePath, symlinkLink); err != nil {
+		t.Fatal(err)
+	}
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movies"}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.configJobs = map[string]config.JobConfig{sourceDir: job}
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error) {
+		return 0, nil
+	}
+	s.scanLinkedFiles = watcher.ScanLinkedFiles
+	s.validateLinkedFile = watcher.ValidateLinkedFile
+
+	err := s.startupCatchUp(context.Background())
+	if err == nil {
+		t.Fatal("startupCatchUp() error = nil, want invalid link_dir entries reported")
+	}
+	if !strings.Contains(err.Error(), "copy.mkv") {
+		t.Fatalf("startupCatchUp() error = %q, want copied file path", err.Error())
+	}
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 1 || ready[0] != goodLink {
+		t.Fatalf("Ready() = %v, want only verified hard link %q", ready, goodLink)
+	}
+	if task := s.taskForKey(copyLink); task != nil {
+		t.Fatalf("copy link task = %+v, want nil", task)
+	}
+	if task := s.taskForKey(symlinkLink); task != nil {
+		t.Fatalf("symlink link task = %+v, want nil", task)
 	}
 }
 
@@ -852,6 +916,7 @@ func TestStartupCatchUpMarksJobDirtyWhenLinkDirHasPendingFiles(t *testing.T) {
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
 	}
+	s.validateLinkedFile = func(string, string) error { return nil }
 
 	if err := s.startupCatchUp(context.Background()); err != nil {
 		t.Fatalf("startupCatchUp() error = %v", err)
@@ -891,6 +956,7 @@ func TestStartupCatchUpRecordsSchedulerEventWhenExistingFilesQueued(t *testing.T
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
 	}
+	s.validateLinkedFile = func(string, string) error { return nil }
 
 	if err := s.startupCatchUp(context.Background()); err != nil {
 		t.Fatalf("startupCatchUp() error = %v", err)
@@ -2860,6 +2926,7 @@ func newTestService() *Service {
 		jobs:               map[string]*jobRuntime{},
 		scanLinkedFiles:    func(string, []string) ([]string, error) { return nil, nil },
 		cleanupLinkedFile:  func(string, string) error { return nil },
+		validateLinkedFile: func(string, string) error { return nil },
 		retryDue:           map[string]time.Time{},
 		failureCounts:      map[string]int{},
 		notifyFinalFailure: func(jobFailureNotification) error { return nil },

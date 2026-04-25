@@ -13,6 +13,10 @@ import (
 
 var errLinkFileOutsideLinkDir = errors.New("link file is outside link dir")
 
+var ErrNonRegularFile = errors.New("file is not a regular file")
+
+var ErrLinkedFileMismatch = errors.New("linked file does not match source file")
+
 var ErrWaitStableTimeout = errors.New("file did not become stable before timeout")
 
 var stableWaitMax = 24 * time.Hour
@@ -31,6 +35,9 @@ type LinkResult struct {
 }
 
 func LinkFile(sourceDir, linkDir, sourceFile string) (LinkResult, error) {
+	if _, err := regularFileInfo(sourceFile); err != nil {
+		return LinkResult{}, err
+	}
 	if DirectUpload(sourceDir, linkDir) {
 		return LinkResult{Path: sourceFile, State: LinkAlreadySameFile}, nil
 	}
@@ -69,12 +76,12 @@ func DirectUpload(sourceDir, linkDir string) bool {
 }
 
 func sameFile(sourceFile, targetPath string) (bool, error) {
-	sourceInfo, err := os.Stat(sourceFile)
+	sourceInfo, err := regularFileInfo(sourceFile)
 	if err != nil {
 		return false, err
 	}
 
-	targetInfo, err := os.Stat(targetPath)
+	targetInfo, err := regularFileInfo(targetPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -83,6 +90,28 @@ func sameFile(sourceFile, targetPath string) (bool, error) {
 	}
 
 	return os.SameFile(sourceInfo, targetInfo), nil
+}
+
+func ValidateLinkedFile(sourceFile, linkFile string) error {
+	same, err := sameFile(sourceFile, linkFile)
+	if err != nil {
+		return err
+	}
+	if !same {
+		return fmt.Errorf("%w: source=%s link=%s", ErrLinkedFileMismatch, sourceFile, linkFile)
+	}
+	return nil
+}
+
+func regularFileInfo(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: %s", ErrNonRegularFile, path)
+	}
+	return info, nil
 }
 
 func replaceHardLink(sourceFile, targetPath string) error {
@@ -176,7 +205,7 @@ func WaitStableContext(ctx context.Context, path string, stableFor time.Duration
 		return err
 	}
 
-	info, err := os.Stat(path)
+	info, err := regularFileInfo(path)
 	if err != nil {
 		return err
 	}
@@ -205,7 +234,7 @@ func WaitStableContext(ctx context.Context, path string, stableFor time.Duration
 		case <-timer.C:
 		}
 
-		info, err := os.Stat(path)
+		info, err := regularFileInfo(path)
 		if err != nil {
 			return err
 		}

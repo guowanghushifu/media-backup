@@ -201,6 +201,68 @@ func TestLinkFileUsesSourceFileWhenLinkDirEqualsSourceDir(t *testing.T) {
 	}
 }
 
+func TestLinkFileRejectsSymlinkSource(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	targetPath := filepath.Join(root, "outside.mkv")
+	symlinkPath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LinkFile(sourceDir, linkDir, symlinkPath)
+	if !errors.Is(err, ErrNonRegularFile) {
+		t.Fatalf("LinkFile() error = %v, want ErrNonRegularFile", err)
+	}
+}
+
+func TestLinkFileRejectsExistingSymlinkTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	outsidePath := filepath.Join(root, "outside.mkv")
+	linkPath := filepath.Join(linkDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LinkFile(sourceDir, linkDir, sourcePath)
+	if !errors.Is(err, ErrNonRegularFile) {
+		t.Fatalf("LinkFile() error = %v, want ErrNonRegularFile", err)
+	}
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		t.Fatalf("Lstat link target: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("existing symlink target was replaced")
+	}
+}
+
 func TestCleanupLinkedFileRemovesOnlyUploadedFileAndEmptyParents(t *testing.T) {
 	t.Parallel()
 
@@ -366,6 +428,25 @@ func TestWaitStableContextReturnsOnCancel(t *testing.T) {
 	err := WaitStableContext(ctx, path, time.Hour, time.Hour)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("WaitStableContext() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestWaitStableContextRejectsSymlink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetPath := filepath.Join(root, "target.mkv")
+	symlinkPath := filepath.Join(root, "link.mkv")
+	if err := os.WriteFile(targetPath, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WaitStableContext(context.Background(), symlinkPath, time.Millisecond, time.Millisecond)
+	if !errors.Is(err, ErrNonRegularFile) {
+		t.Fatalf("WaitStableContext() error = %v, want ErrNonRegularFile", err)
 	}
 }
 
