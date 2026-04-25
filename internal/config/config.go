@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -152,21 +153,58 @@ func validateConfig(cfg *Config) error {
 		if strings.TrimSpace(job.SourceDir) == "" {
 			return errors.New("job source_dir is required")
 		}
-		if strings.TrimSpace(job.LinkDir) == "" {
-			return errors.New("job link_dir is required")
-		}
 		if strings.TrimSpace(job.RcloneRemote) == "" {
 			return errors.New("job rclone_remote is required")
 		}
 		if _, ok := sourceDirs[job.SourceDir]; ok {
 			return fmt.Errorf("duplicate source_dir: %s", job.SourceDir)
 		}
-		if _, ok := linkDirs[job.LinkDir]; ok {
-			return fmt.Errorf("duplicate link_dir: %s", job.LinkDir)
+		if isSeparateLinkDir(job) {
+			if pathInside(job.SourceDir, job.LinkDir) {
+				return fmt.Errorf("link_dir must not be inside source_dir: %s", job.LinkDir)
+			}
+			if _, ok := linkDirs[job.LinkDir]; ok {
+				return fmt.Errorf("duplicate link_dir: %s", job.LinkDir)
+			}
+			linkDirs[job.LinkDir] = struct{}{}
 		}
 		sourceDirs[job.SourceDir] = struct{}{}
-		linkDirs[job.LinkDir] = struct{}{}
 	}
 
+	for _, job := range cfg.Jobs {
+		if !isSeparateLinkDir(job) {
+			continue
+		}
+		for _, other := range cfg.Jobs {
+			if other.SourceDir == job.SourceDir {
+				continue
+			}
+			if pathInside(other.SourceDir, job.LinkDir) || sameCleanPath(other.SourceDir, job.LinkDir) {
+				return fmt.Errorf("source_dir must not contain another job's link_dir: source_dir=%s link_dir=%s", other.SourceDir, job.LinkDir)
+			}
+			if pathInside(job.LinkDir, other.SourceDir) {
+				return fmt.Errorf("source_dir must not be inside another job's link_dir: source_dir=%s link_dir=%s", other.SourceDir, job.LinkDir)
+			}
+		}
+	}
 	return nil
+}
+
+func isSeparateLinkDir(job JobConfig) bool {
+	if strings.TrimSpace(job.LinkDir) == "" {
+		return false
+	}
+	return !sameCleanPath(job.SourceDir, job.LinkDir)
+}
+
+func sameCleanPath(a, b string) bool {
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func pathInside(parent, child string) bool {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

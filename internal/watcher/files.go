@@ -31,6 +31,9 @@ type LinkResult struct {
 }
 
 func LinkFile(sourceDir, linkDir, sourceFile string) (LinkResult, error) {
+	if DirectUpload(sourceDir, linkDir) {
+		return LinkResult{Path: sourceFile, State: LinkAlreadySameFile}, nil
+	}
 	rel, err := filepath.Rel(sourceDir, sourceFile)
 	if err != nil {
 		return LinkResult{}, err
@@ -56,6 +59,13 @@ func LinkFile(sourceDir, linkDir, sourceFile string) (LinkResult, error) {
 		return LinkResult{}, err
 	}
 	return LinkResult{Path: linkPath, State: LinkCreated}, nil
+}
+
+func DirectUpload(sourceDir, linkDir string) bool {
+	if strings.TrimSpace(linkDir) == "" {
+		return true
+	}
+	return filepath.Clean(sourceDir) == filepath.Clean(linkDir)
 }
 
 func sameFile(sourceFile, targetPath string) (bool, error) {

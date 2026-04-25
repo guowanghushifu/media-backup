@@ -159,6 +159,48 @@ func TestLinkFileReplacesStaleLinkWhenSourcePathGetsNewInode(t *testing.T) {
 	}
 }
 
+func TestLinkFileUsesSourceFileWhenLinkDirIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := t.TempDir()
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.WriteFile(sourcePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("WriteFile source: %v", err)
+	}
+
+	result, err := LinkFile(sourceDir, "", sourcePath)
+	if err != nil {
+		t.Fatalf("LinkFile() error = %v", err)
+	}
+	if result.Path != sourcePath {
+		t.Fatalf("LinkFile() path = %q, want source path %q", result.Path, sourcePath)
+	}
+	if result.State != LinkAlreadySameFile {
+		t.Fatalf("LinkFile() state = %v, want %v", result.State, LinkAlreadySameFile)
+	}
+}
+
+func TestLinkFileUsesSourceFileWhenLinkDirEqualsSourceDir(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := t.TempDir()
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.WriteFile(sourcePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("WriteFile source: %v", err)
+	}
+
+	result, err := LinkFile(sourceDir, sourceDir, sourcePath)
+	if err != nil {
+		t.Fatalf("LinkFile() error = %v", err)
+	}
+	if result.Path != sourcePath {
+		t.Fatalf("LinkFile() path = %q, want source path %q", result.Path, sourcePath)
+	}
+	if result.State != LinkAlreadySameFile {
+		t.Fatalf("LinkFile() state = %v, want %v", result.State, LinkAlreadySameFile)
+	}
+}
+
 func TestCleanupLinkedFileRemovesOnlyUploadedFileAndEmptyParents(t *testing.T) {
 	t.Parallel()
 

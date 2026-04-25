@@ -604,6 +604,60 @@ func TestStartupCatchUpQueuesEachLinkedFileIndividually(t *testing.T) {
 	}
 }
 
+func TestStartupCatchUpDirectUploadQueuesSourceFilesAndSkipsLinkDirSetup(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := "/source"
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	job := config.JobConfig{
+		Name:         "MOVIE",
+		SourceDir:    sourceDir,
+		LinkDir:      "",
+		RcloneRemote: "remote:movies",
+	}
+
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Second
+	s.configJobs = map[string]config.JobConfig{
+		sourceDir: job,
+	}
+	s.mkdirAll = func(path string, _ os.FileMode) error {
+		t.Fatalf("mkdirAll(%q) called for empty direct-upload link_dir", path)
+		return nil
+	}
+	s.addWatches = func(path string) error {
+		if path != sourceDir {
+			t.Fatalf("addWatches(%q), want %q", path, sourceDir)
+		}
+		return nil
+	}
+	s.scanExistingFiles = func(_ context.Context, gotSourceDir, gotLinkDir string, _ []string, _ time.Duration, _ time.Duration) ([]watcher.LinkResult, error) {
+		if gotSourceDir != sourceDir {
+			t.Fatalf("scanExisting sourceDir = %q, want %q", gotSourceDir, sourceDir)
+		}
+		if gotLinkDir != sourceDir {
+			t.Fatalf("scanExisting linkDir = %q, want sourceDir for direct upload", gotLinkDir)
+		}
+		return []watcher.LinkResult{{Path: sourcePath, State: watcher.LinkAlreadySameFile}}, nil
+	}
+	s.scanLinkedFiles = func(root string, _ []string) ([]string, error) {
+		if root != sourceDir {
+			t.Fatalf("scanLinkedFiles root = %q, want sourceDir for direct upload", root)
+		}
+		return []string{sourcePath}, nil
+	}
+
+	if err := s.startupCatchUp(context.Background()); err != nil {
+		t.Fatalf("startupCatchUp() error = %v", err)
+	}
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 1 || ready[0] != sourcePath {
+		t.Fatalf("Ready() = %v, want source file key %q", ready, sourcePath)
+	}
+}
+
 func TestStartupCatchUpMarksJobDirtyWhenLinkDirHasPendingFiles(t *testing.T) {
 	t.Parallel()
 
@@ -764,6 +818,40 @@ func TestProcessFileQueuesSiblingFilesAsIndependentTasks(t *testing.T) {
 		if _, ok := want[key]; !ok {
 			t.Fatalf("Ready() contains unexpected key %q (all=%v)", key, ready)
 		}
+	}
+}
+
+func TestProcessFileDirectUploadQueuesSourceFileWhenLinkDirEmpty(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: "", RcloneRemote: "remote:movies"}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Millisecond
+	s.cfg.PollInterval = time.Millisecond
+
+	s.processFile(context.Background(), job, sourcePath)
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 1 || ready[0] != sourcePath {
+		t.Fatalf("Ready() = %v, want source file key %q", ready, sourcePath)
+	}
+	task := s.taskForKey(sourcePath)
+	if task == nil {
+		t.Fatal("taskForKey(sourcePath) = nil, want direct upload task")
+	}
+	if task.linkPath != sourcePath {
+		t.Fatalf("task.linkPath = %q, want source path %q", task.linkPath, sourcePath)
 	}
 }
 
@@ -1472,6 +1560,55 @@ func TestRunUploadSuccessRemovesOnlyUploadedLinkedFile(t *testing.T) {
 	}
 	if _, err := os.Stat(siblingDir); err != nil {
 		t.Fatalf("sibling directory removed unexpectedly: %v", err)
+	}
+}
+
+func TestRunUploadSuccessKeepsSourceFileForDirectUpload(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("source-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestService()
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.cleanupLinkedFile = func(string, string) error {
+		t.Fatal("cleanupLinkedFile called for direct upload")
+		return nil
+	}
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    sourceDir,
+			LinkDir:      "",
+			RcloneRemote: "remote:movie",
+		},
+		key:        sourcePath,
+		sourcePath: sourcePath,
+		linkPath:   sourcePath,
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	got, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("source file missing after direct upload: %v", err)
+	}
+	if string(got) != "source-bytes" {
+		t.Fatalf("source file content = %q, want preserved bytes", string(got))
 	}
 }
 

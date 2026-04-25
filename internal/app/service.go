@@ -37,6 +37,7 @@ type Service struct {
 	mkdirAll           func(string, os.FileMode) error
 	addWatches         func(string) error
 	scanExisting       func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error)
+	scanExistingFiles  func(context.Context, string, string, []string, time.Duration, time.Duration) ([]watcher.LinkResult, error)
 	scanLinkedFiles    func(string, []string) ([]string, error)
 	copyJob            func(context.Context, *jobRuntime) error
 	cleanupLinkedFile  func(string, string) error
@@ -113,6 +114,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		uiWriter:          os.Stdout,
 		mkdirAll:          os.MkdirAll,
 		scanExisting:      watcher.ScanExistingAndLinkContext,
+		scanExistingFiles: watcher.ScanExistingAndLinkFilesContext,
 		scanLinkedFiles:   watcher.ScanLinkedFiles,
 		cleanupLinkedFile: watcher.CleanupLinkedFile,
 		now:               time.Now,
@@ -189,42 +191,75 @@ func (s *Service) Run(ctx context.Context) error {
 
 func (s *Service) startupCatchUp(ctx context.Context) error {
 	for _, cfgJob := range s.configJobList() {
-		if err := s.mkdirAll(cfgJob.LinkDir, 0o755); err != nil {
+		directUpload := watcher.DirectUpload(cfgJob.SourceDir, cfgJob.LinkDir)
+		uploadRoot := cfgJob.LinkDir
+		if directUpload {
+			uploadRoot = cfgJob.SourceDir
+		} else if err := s.mkdirAll(cfgJob.LinkDir, 0o755); err != nil {
 			return err
 		}
 		if err := s.addWatches(cfgJob.SourceDir); err != nil {
 			return err
 		}
-		scannedCount, err := s.scanExisting(ctx, cfgJob.SourceDir, cfgJob.LinkDir, s.cfg.Extensions, s.cfg.StableDuration, s.cfg.PollInterval)
-		if err != nil {
-			return err
+		scannedCount := 0
+		var uploadFiles []string
+		if directUpload {
+			results, err := s.scanExistingUploadFiles(ctx, cfgJob, uploadRoot)
+			if err != nil {
+				return err
+			}
+			scannedCount = len(results)
+			uploadFiles = make([]string, 0, len(results))
+			for _, result := range results {
+				uploadFiles = append(uploadFiles, result.Path)
+			}
+		} else {
+			count, err := s.scanExisting(ctx, cfgJob.SourceDir, cfgJob.LinkDir, s.cfg.Extensions, s.cfg.StableDuration, s.cfg.PollInterval)
+			if err != nil {
+				return err
+			}
+			scannedCount = count
+			scanLinkedFiles := s.scanLinkedFiles
+			if scanLinkedFiles == nil {
+				scanLinkedFiles = watcher.ScanLinkedFiles
+			}
+			linkFiles, err := scanLinkedFiles(uploadRoot, s.cfg.Extensions)
+			if err != nil {
+				return err
+			}
+			uploadFiles = linkFiles
 		}
-		scanLinkedFiles := s.scanLinkedFiles
-		if scanLinkedFiles == nil {
-			scanLinkedFiles = watcher.ScanLinkedFiles
-		}
-		linkFiles, err := scanLinkedFiles(cfgJob.LinkDir, s.cfg.Extensions)
-		if err != nil {
-			return err
-		}
-		for _, linkPath := range linkFiles {
-			task, err := s.registerTaskByLinkPath(cfgJob, linkPath)
+		for _, uploadPath := range uploadFiles {
+			var task *jobRuntime
+			var err error
+			if directUpload {
+				task, err = s.registerTask(cfgJob, uploadPath, uploadPath)
+			} else {
+				task, err = s.registerTaskByLinkPath(cfgJob, uploadPath)
+			}
 			if err != nil {
 				return err
 			}
 			s.scheduler.MarkDirty(task.key)
 			s.runAfterMarkDirty(task.key)
 		}
-		if len(linkFiles) > 0 {
+		if len(uploadFiles) > 0 {
 			eventTask := &jobRuntime{cfg: cfgJob}
 			if scannedCount > 0 {
 				s.appendSchedulerEventNow(eventTask, fmt.Sprintf("启动扫描发现 %d 个文件，任务标记为待上传", scannedCount))
 			} else {
-				s.appendSchedulerEventNow(eventTask, fmt.Sprintf("链接目录发现 %d 个待上传文件，任务标记为待上传", len(linkFiles)))
+				s.appendSchedulerEventNow(eventTask, fmt.Sprintf("链接目录发现 %d 个待上传文件，任务标记为待上传", len(uploadFiles)))
 			}
 		}
 	}
 	return nil
+}
+
+func (s *Service) scanExistingUploadFiles(ctx context.Context, cfgJob config.JobConfig, uploadRoot string) ([]watcher.LinkResult, error) {
+	if s.scanExistingFiles != nil {
+		return s.scanExistingFiles(ctx, cfgJob.SourceDir, uploadRoot, s.cfg.Extensions, s.cfg.StableDuration, s.cfg.PollInterval)
+	}
+	return watcher.ScanExistingAndLinkFilesContext(ctx, cfgJob.SourceDir, uploadRoot, s.cfg.Extensions, s.cfg.StableDuration, s.cfg.PollInterval)
 }
 
 func (s *Service) configJobList() []config.JobConfig {
@@ -594,6 +629,11 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	job.cancel = nil
 	job.summary = "上传完成"
 	s.mu.Unlock()
+
+	if watcher.DirectUpload(job.cfg.SourceDir, job.cfg.LinkDir) {
+		s.finishUploadSuccessLocked(job)
+		return
+	}
 
 	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {

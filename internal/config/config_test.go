@@ -285,6 +285,110 @@ jobs:
 	}
 }
 
+func TestLoadConfigAllowsEmptyLinkDirForDirectUpload(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: ""
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.Jobs[0].LinkDir != "" {
+		t.Fatalf("LinkDir = %q, want empty string", cfg.Jobs[0].LinkDir)
+	}
+}
+
+func TestLoadConfigAllowsLinkDirEqualSourceDirForDirectUpload(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /media/movies
+    rclone_remote: remote:movies
+`)
+
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsLinkDirInsideSourceDir(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /media/movies/.upload-buffer
+    rclone_remote: remote:movies
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want nested link_dir validation error")
+	}
+	if !strings.Contains(err.Error(), "link_dir must not be inside source_dir") {
+		t.Fatalf("error = %q, want nested link_dir validation error", err.Error())
+	}
+}
+
+func TestLoadConfigRejectsCrossNestedSourceAndLinkDirs(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /buffer/movies
+    rclone_remote: remote:movies
+  - name: remux
+    source_dir: /buffer
+    link_dir: ""
+    rclone_remote: remote:remux
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want cross nested source/link validation error")
+	}
+	if !strings.Contains(err.Error(), "source_dir must not contain another job's link_dir") {
+		t.Fatalf("error = %q, want cross nested source/link validation error", err.Error())
+	}
+}
+
+func TestLoadConfigRejectsSourceDirInsideAnotherJobLinkDir(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /buffer/movies
+    rclone_remote: remote:movies
+  - name: remux
+    source_dir: /buffer/movies/pending
+    link_dir: ""
+    rclone_remote: remote:remux
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want cross nested source/link validation error")
+	}
+	if !strings.Contains(err.Error(), "source_dir must not be inside another job's link_dir") {
+		t.Fatalf("error = %q, want source-inside-link validation error", err.Error())
+	}
+}
+
 func TestLoadConfigRejectsNoJobs(t *testing.T) {
 	t.Parallel()
 
@@ -331,7 +435,7 @@ func TestLoadConfigRejectsJobMissingRequiredField(t *testing.T) {
     name: job-a
     source_dir: /media/a
     rclone_remote: remote:a`,
-			wantError: "job link_dir is required",
+			wantError: "",
 		},
 		{
 			name: "missing rclone_remote",
@@ -354,6 +458,12 @@ jobs:
 `)
 
 			_, err := LoadConfig(path)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("LoadConfig returned error: %v", err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatalf("LoadConfig error = nil, want %q", tc.wantError)
 			}

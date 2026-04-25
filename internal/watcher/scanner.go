@@ -20,9 +20,10 @@ func ScanAndLink(sourceDir, linkDir string, extensions []string, stableDuration 
 }
 
 func ScanAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration, pollInterval time.Duration) (int, error) {
-	return scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
+	results, err := scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
 		return waitForScanStable(ctx, path, stableDuration, pollInterval)
 	})
+	return len(results), err
 }
 
 func ScanExistingAndLink(sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
@@ -30,6 +31,11 @@ func ScanExistingAndLink(sourceDir, linkDir string, extensions []string, stableD
 }
 
 func ScanExistingAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration, pollInterval time.Duration) (int, error) {
+	results, err := ScanExistingAndLinkFilesContext(ctx, sourceDir, linkDir, extensions, stableDuration, pollInterval)
+	return len(results), err
+}
+
+func ScanExistingAndLinkFilesContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration, pollInterval time.Duration) ([]LinkResult, error) {
 	return scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -67,15 +73,15 @@ func ScanLinkedFiles(root string, extensions []string) ([]string, error) {
 	return paths, nil
 }
 
-func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func(path string) error) (int, error) {
-	var count int
+func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func(path string) error) ([]LinkResult, error) {
+	results := make([]LinkResult, 0)
 	cleanLinkDir := filepath.Clean(linkDir)
 	err := filepath.WalkDir(sourceDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if filepath.Clean(path) == cleanLinkDir {
+			if !DirectUpload(sourceDir, linkDir) && filepath.Clean(path) == cleanLinkDir {
 				return filepath.SkipDir
 			}
 			return nil
@@ -91,13 +97,14 @@ func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func
 				return err
 			}
 		}
-		if _, err := LinkFile(sourceDir, linkDir, path); err != nil {
+		result, err := LinkFile(sourceDir, linkDir, path)
+		if err != nil {
 			return err
 		}
-		count++
+		results = append(results, result)
 		return nil
 	})
-	return count, err
+	return results, err
 }
 
 var errSkipUnstableFile = errors.New("skip unstable file")

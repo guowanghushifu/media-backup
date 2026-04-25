@@ -2,15 +2,15 @@
 
 ## 1. 程序目标
 
-`media-backup` 是一个面向视频文件备份/上传的常驻程序。它从 YAML 配置文件读取多个 `jobs`，每个 job 定义一组源目录、硬链接目录和 rclone 远端目录。程序启动后会：
+`media-backup` 是一个面向视频文件备份/上传的常驻程序。它从 YAML 配置文件读取多个 `jobs`，每个 job 定义源目录、可选硬链接目录和 rclone 远端目录。程序启动后会：
 
 1. 递归监控每个 `source_dir` 中的视频文件变更。
 2. 等待新文件大小稳定，避免上传尚未写完的文件。
-3. 将源文件按相对路径硬链接到对应 `link_dir`。
-4. 为每个待上传的硬链接文件注册独立上传任务。
+3. 如果 `link_dir` 非空且不同于 `source_dir`，将源文件按相对路径硬链接到对应 `link_dir`；如果 `link_dir` 为空或等于 `source_dir`，跳过硬链接，直接把源文件作为上传文件。
+4. 为每个待上传文件注册独立上传任务。
 5. 通过内部调度器控制并发、重试和同路径文件替换。
-6. 调用 `rclone copy <link_file> <remote_dir>/ ...args` 上传单个硬链接文件。
-7. 上传成功后删除该硬链接文件，并清理空的父目录。
+6. 调用 `rclone copy <upload_file> <remote_dir>/ ...args` 上传单个文件。
+7. 上传成功后，如果任务使用独立 `link_dir`，删除该硬链接文件并清理空的父目录；如果任务直传源文件，则保留源文件，不执行上传后文件清理。
 8. 在终端实时展示活动任务、排队数和最近事件；同时写入按天轮转的日志。
 9. 可选地在达到最大重试次数后发送 Telegram 最终失败通知。
 
@@ -20,7 +20,7 @@
 
 - `cmd/media-backup/main.go`：命令行入口、配置路径解析、日志初始化、信号处理。
 - `internal/config`：配置结构、默认值、规范化和校验。
-- `internal/watcher`：文件扫描、稳定性等待、硬链接创建、上传后清理。
+- `internal/watcher`：文件扫描、稳定性等待、硬链接创建或直传路径选择、上传后清理。
 - `internal/queue`：上传任务调度器，负责去重、并发限制、失败重试状态。
 - `internal/rclone`：rclone 命令构造、代理环境变量、输出解析、远端路径计算。
 - `internal/app`：主服务编排，串联监控、扫描、链接、调度、上传、UI、日志和通知。
@@ -49,15 +49,19 @@
 
 - `name`：任务显示名，用于 UI 和日志/事件。
 - `source_dir`：源目录，程序递归监控这里的文件。
-- `link_dir`：硬链接目录，程序将待上传文件硬链接到这里。
+- `link_dir`：硬链接目录。为空或等于 `source_dir` 时启用直传源文件模式，不创建硬链接；非空且不同于 `source_dir` 时，程序将待上传文件硬链接到这里。
 - `rclone_remote`：rclone 远端根目录。
 
 配置校验要求：
 
 - `jobs` 不能为空。
-- 每个 job 的 `name`、`source_dir`、`link_dir`、`rclone_remote` 都不能为空。
+- 每个 job 的 `name`、`source_dir`、`rclone_remote` 都不能为空。
+- `link_dir` 可以为空；为空时等价于直传源文件模式。
 - `source_dir` 不能重复。
-- `link_dir` 不能重复。
+- 非空 `link_dir` 不能重复。
+- `link_dir` 等于 `source_dir` 时允许，表示直传源文件模式。
+- `link_dir` 位于同一个 job 的 `source_dir` 内部时不允许，除非二者相等。
+- 不同 job 之间不允许出现 `source_dir` 和非空 `link_dir` 的交叉嵌套关系，避免一个 job 把另一个 job 的上传缓冲区当作源目录处理。
 - 启用代理时，`scheme` 只能是 `http` 或 `https`，且必须配置 `host` 和大于 0 的 `port`。
 - 启用 Telegram 时，必须配置非空的 `bot_token` 和 `chat_id`。
 
@@ -94,11 +98,11 @@
 - `fsnotify.Watcher`：监听文件系统事件。
 - `queue.Scheduler`：上传任务调度器。
 - `configJobs`：以 `source_dir` 为 key 的配置 job 映射。
-- `jobs`：以硬链接路径为 key 的运行时任务表。
+- `jobs`：以实际上传文件路径为 key 的运行时任务表。独立 `link_dir` 模式下 key 是硬链接路径；直传源文件模式下 key 是源文件路径。
 - `processing`：防止同一个源文件被多个 goroutine 重复处理。
 - `retryDue`：记录失败任务下次允许重试的时间。
-- `failureCounts`：记录每个硬链接路径的连续失败次数。
-- `processSem`：限制前置文件处理并发，当前固定最多 32 个文件同时执行稳定等待、硬链接和任务注册。
+- `failureCounts`：记录每个上传文件路径的连续失败次数。
+- `processSem`：限制前置文件处理并发，当前固定最多 32 个文件同时执行稳定等待、上传路径准备和任务注册。
 - `wakeCh`：唤醒调度循环。
 - `uiWakeCh`：唤醒 UI 刷新。
 - Telegram notifier：仅在配置启用时创建。
@@ -121,13 +125,14 @@
 
 对每个配置 job：
 
-1. 创建 `link_dir`。
-2. 递归为 `source_dir` 下所有目录添加 fsnotify watch。
-3. 调用 `watcher.ScanExistingAndLink` 扫描源目录中已存在的视频文件。
-4. 对扫描到的文件创建硬链接。
-5. 扫描 `link_dir` 中所有允许扩展名的文件。
-6. 将每个硬链接文件注册为独立上传任务，并标记为 dirty/待上传。
-7. 如果有待上传文件，写入最近事件：启动扫描发现文件，或链接目录发现待上传文件。
+1. 判断 job 是否为直传源文件模式：`link_dir` 为空或等于 `source_dir`。
+2. 如果不是直传源文件模式，创建 `link_dir`。
+3. 递归为 `source_dir` 下所有目录添加 fsnotify watch。
+4. 扫描源目录中已存在的视频文件。
+5. 独立 `link_dir` 模式下，对扫描到的文件创建硬链接；直传源文件模式下，直接注册源文件。
+6. 独立 `link_dir` 模式下，扫描 `link_dir` 中所有允许扩展名的文件。
+7. 将每个待上传文件注册为独立上传任务，并标记为 dirty/待上传。
+8. 如果有待上传文件，写入最近事件：启动扫描发现文件，或链接目录发现待上传文件。
 
 `ScanExistingAndLink` 的稳定性策略：
 
@@ -179,16 +184,17 @@
 
 如果 `poll_interval <= 0`，函数内部会使用 `100ms` 作为兜底值。运行期处理文件时，稳定等待超时只记录日志并释放该路径，后续文件继续变化产生 fsnotify 事件时会再次触发处理。
 
-## 10. 硬链接实现
+## 10. 上传路径准备
 
-硬链接逻辑在 `watcher.LinkFile`：
+上传路径准备逻辑在 `watcher.LinkFile` 或等价 helper 中实现：
 
-1. 计算 `sourceFile` 相对于 `sourceDir` 的相对路径。
-2. 将相对路径拼到 `linkDir` 下，得到 `linkPath`。
-3. 创建 `linkPath` 的父目录。
-4. 调用 `os.Link(sourceFile, linkPath)` 创建硬链接。
+1. 如果 `linkDir` 为空或等于 `sourceDir`，不调用 `os.Link`，直接返回源文件路径作为 `uploadPath`，并标记为直传源文件模式。
+2. 否则计算 `sourceFile` 相对于 `sourceDir` 的相对路径。
+3. 将相对路径拼到 `linkDir` 下，得到 `linkPath`。
+4. 创建 `linkPath` 的父目录。
+5. 调用 `os.Link(sourceFile, linkPath)` 创建硬链接，并返回 `linkPath` 作为 `uploadPath`。
 
-如果目标路径已存在：
+独立 `link_dir` 模式下，如果目标路径已存在：
 
 - 若目标与源文件是同一个 inode，认为已经链接成功，直接返回。
 - 若目标存在但不是同一个文件，认为同路径源文件可能被替换，调用 `replaceHardLink`：
@@ -198,18 +204,20 @@
 
 这样可以支持“同一路径的视频文件被新 inode 替换”的场景，并尽量避免上传目录中出现半成品状态。
 
+直传源文件模式下，上传成功后不能删除 `uploadPath`，因为它就是源文件。
+
 ## 11. 源目录扫描
 
 `watcher.ScanExistingAndLink` 和 `watcher.ScanAndLink` 都基于 `scanAndLink`：
 
 - 使用 `filepath.WalkDir` 递归遍历 `source_dir`。
 - 只处理普通文件，目录继续递归。
-- 如果 `link_dir` 嵌套在 `source_dir` 下，扫描时会跳过 `link_dir`，避免把硬链接目录再次当作源文件处理。
+- 配置层不允许 `link_dir` 嵌套在 `source_dir` 内部，除非二者相等。扫描层仍应把非直传模式下的 `link_dir` 作为防御性跳过目录，避免异常配置或历史目录导致自递归处理。
 - 扩展名比较不区分大小写。
 - 处理文件前可执行稳定性等待。
-- 对匹配文件调用 `LinkFile`。
+- 独立 `link_dir` 模式下，对匹配文件调用 `LinkFile`；直传源文件模式下，直接返回源文件作为待上传文件。
 
-`ScanLinkedFiles` 则递归扫描 `link_dir`，返回所有允许扩展名的待上传文件路径。
+`ScanLinkedFiles` 则递归扫描独立 `link_dir`，返回所有允许扩展名的待上传文件路径。直传源文件模式不扫描 `link_dir`。
 
 ## 12. 远端目录映射
 
@@ -232,31 +240,32 @@
 上传时调用的是单文件复制：
 
 ```text
-rclone copy <link_file> <remoteDir>/ <rclone_args...>
+rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 ```
 
-注意：程序上传的是 `link_dir` 下的单个硬链接文件，但远端目录根据原始 `source_dir` 的相对路径计算。
+注意：独立 `link_dir` 模式下，程序上传的是 `link_dir` 下的单个硬链接文件；直传源文件模式下，程序上传的是源文件本身。两种模式的远端目录都根据原始 `source_dir` 的相对路径计算。
 
 ## 13. 任务模型
 
 运行时上传任务使用 `jobRuntime` 表示，关键字段包括：
 
 - `cfg`：所属配置 job。
-- `key`：任务 key，当前实现为硬链接文件路径。
+- `key`：任务 key，当前实现为实际上传文件路径。
 - `sourcePath`：源文件路径。
-- `linkPath`：硬链接文件路径。
+- `uploadPath`：实际传给 rclone 的本地文件路径。独立 `link_dir` 模式下是硬链接文件路径；直传源文件模式下是源文件路径。
+- `linkPath`：硬链接文件路径，仅独立 `link_dir` 模式有意义；直传源文件模式下可与 `sourcePath`/`uploadPath` 相同或为空，但不能触发上传后删除。
 - `remoteDir`：该文件应该上传到的 rclone 远端目录。
 - `summary`：UI 展示的上传摘要。
 - `active`：是否正在上传。
 - `cancel`：用于取消当前上传的 context cancel cause。
 
-任务表 `Service.jobs` 使用 `linkPath` 作为 key。这意味着同一个 job 下的不同文件是独立任务，兄弟文件可并发上传；同一路径的文件更新会复用同一个 key，并触发替换逻辑。
+任务表 `Service.jobs` 使用 `uploadPath` 作为 key。这意味着同一个 job 下的不同文件是独立任务，兄弟文件可并发上传；同一路径的文件更新会复用同一个 key，并触发替换逻辑。
 
 ## 14. 注册任务和同路径更新
 
-文件稳定并创建硬链接后，`linkAndQueueTask` 会：
+文件稳定并准备上传路径后，`linkAndQueueTask` 会：
 
-1. 创建或更新硬链接。
+1. 独立 `link_dir` 模式下创建或更新硬链接；直传源文件模式下跳过硬链接并使用源文件路径。
 2. 判断同路径任务是否已有失败计数，必要时准备重置。
 3. 调用 `registerTaskLocked` 注册运行时任务。
 4. 将任务标记为 dirty。
@@ -270,10 +279,10 @@ rclone copy <link_file> <remoteDir>/ <rclone_args...>
 
 当同路径文件在上传中被更新时：
 
-1. 创建新的 `jobRuntime` 替换 `jobs[linkPath]`。
+1. 创建新的 `jobRuntime` 替换 `jobs[uploadPath]`。
 2. 删除旧 key 的失败计数。
 3. 调用旧任务的 cancel 函数，cause 为 `errUploadSuperseded`。
-4. 旧上传结束后进入 `finishUploadSuperseded`，不会清理硬链接，也不会按普通失败重试。
+4. 旧上传结束后进入 `finishUploadSuperseded`，不会清理上传文件，也不会按普通失败重试。
 5. 调度器通过 `Finish(job.key, true)` 将该 key 重新排队。
 
 当同路径文件在重试等待中被更新时：
@@ -399,7 +408,7 @@ rclone copy <link_file> <remoteDir>/ <rclone_args...>
 `copyWithRclone` 创建 `rclone.CommandExecutor`，再用 `rclone.Runner.CopyFile` 执行：
 
 ```text
-rclone copy <linkPath> <remoteDirWithTrailingSlash> <rclone_args...>
+rclone copy <uploadPath> <remoteDirWithTrailingSlash> <rclone_args...>
 ```
 
 特点：
@@ -417,14 +426,15 @@ rclone 返回成功后：
 
 1. 如果 context cause 是 `errUploadSuperseded`，按“被新文件替换”处理。
 2. 否则将任务标记为 inactive，summary 设为“上传完成”。
-3. 调用 `CleanupLinkedFile(linkDir, linkPath)` 删除硬链接文件。
-4. 删除后向上清理空父目录，但不会删除 `link_dir` 根目录。
-5. 清理成功后清空失败计数。
-6. 调度器 `Finish(key, false)`。
-7. 如果任务已无 queued/running/retry 状态，调用 `Forget` 并从 `jobs` 删除。
-8. 记录“上传完成，任务清空”或“上传完成，任务保留”。
+3. 如果任务是独立 `link_dir` 模式，调用 `CleanupLinkedFile(linkDir, uploadPath)` 删除硬链接文件。
+4. 独立 `link_dir` 模式下，删除后向上清理空父目录，但不会删除 `link_dir` 根目录。
+5. 如果任务是直传源文件模式，跳过 `CleanupLinkedFile`，必须保留源文件。
+6. 清理成功或跳过清理后，清空失败计数。
+7. 调度器 `Finish(key, false)`。
+8. 如果任务已无 queued/running/retry 状态，调用 `Forget` 并从 `jobs` 删除。
+9. 记录“上传完成，任务清空”或“上传完成，任务保留”。
 
-如果清理时发现硬链接文件已经不存在，程序记录日志，但仍视为上传完成。
+独立 `link_dir` 模式下，如果清理时发现硬链接文件已经不存在，程序记录日志，但仍视为上传完成。直传源文件模式下不应因为上传成功而删除或移动源文件。
 
 ### 17.3 失败路径
 
@@ -446,13 +456,13 @@ rclone 返回错误时：
    - 记录“上传失败，达到最大重试次数，停止重试”。
    - 清理该 key 的内存状态，包括运行时任务、失败计数、重试时间和调度器终态状态。
    - 如果启用 Telegram，发送最终失败通知。
-5. 失败时不会删除硬链接文件，因此未达到重试上限时后续重试仍可上传同一个硬链接文件；达到上限后硬链接文件保留，等待新事件或重启扫描重新注册。
+5. 失败时不会删除上传文件。独立 `link_dir` 模式下，硬链接文件保留以便重试；直传源文件模式下，源文件本来就必须保留。达到重试上限后，文件仍保留，等待新事件或重启扫描重新注册。
 
 `max_retry_count = 0` 表示无限重试。对于大于 0 的值，当前实现中 `failures < max_retry_count` 时继续重试，达到该次数时停止。
 
 ## 18. 上传后清理
 
-`watcher.CleanupLinkedFile` 只允许删除 `link_dir` 内部的文件：
+`watcher.CleanupLinkedFile` 只允许删除独立 `link_dir` 内部的硬链接文件：
 
 1. 对 `linkDir` 和 `linkFile` 做 clean。
 2. 计算相对路径。
@@ -461,7 +471,7 @@ rclone 返回错误时：
 5. 从该文件父目录开始，逐级删除空目录。
 6. 遇到非空目录或到达 `link_dir` 根目录时停止。
 
-这个逻辑保证上传完成只清理上传缓冲区中的硬链接，不会删除源文件，也不会删除 `link_dir` 根目录。
+这个逻辑保证上传完成只清理上传缓冲区中的硬链接，不会删除源文件，也不会删除 `link_dir` 根目录。直传源文件模式必须完全跳过该清理逻辑。
 
 ## 19. rclone 输出解析
 
@@ -590,7 +600,7 @@ Service 内部维护 `recentEvents`：
 
 - `Service.mu`：保护运行时任务表、processing、recentEvents、retryDue、failureCounts 等共享状态。
 - `Service.completionMu`：串行化任务注册、上传完成、失败和替换相关的关键路径，避免同路径更新和旧上传完成交错导致误清理。
-- `Service.processSem`：限制最多 32 个文件同时执行前置处理，避免大量不同文件事件同时进入稳定等待和硬链接阶段。
+- `Service.processSem`：限制最多 32 个文件同时执行前置处理，避免大量不同文件事件同时进入稳定等待和上传路径准备阶段。
 - `queue.Scheduler.mu`：保护调度器内部状态。
 - `processing`：避免同一个源路径被多个事件同时处理。
 - `wakeCh` 和 `uiWakeCh` 都是容量 1 的 channel，发送时非阻塞；多个唤醒可合并，避免阻塞业务 goroutine。
@@ -598,7 +608,7 @@ Service 内部维护 `recentEvents`：
 特别重要的是同路径替换场景：
 
 - 如果同一路径文件在上传中被新文件替换，旧上传会被 cancel cause 标记为 superseded。
-- 旧上传结束后不会删除硬链接文件，因为硬链接路径已经指向新文件。
+- 旧上传结束后不会删除上传文件。独立 `link_dir` 模式下，硬链接路径可能已经指向新文件；直传源文件模式下，上传路径就是源文件，任何情况下都不能因 superseded 清理而删除。
 - 调度器重新排队同一个 key，确保上传最新文件。
 
 ## 25. 退出行为
@@ -658,15 +668,38 @@ rclone copy /dld/gd_upload/Movie-2025/A/movie.mkv gd1:/sync/Movie/Movie-2025/A/ 
 13. 源文件 `/dld/upload/Movie-2025/A/movie.mkv` 不会被删除。
 14. 任务从调度器和运行时任务表清空，UI 记录完成事件。
 
+如果该 job 配置为直传源文件模式：
+
+```yaml
+jobs:
+  - name: MOVIE
+    source_dir: /dld/upload/Movie-2025
+    link_dir: ""
+    rclone_remote: gd1:/sync/Movie/Movie-2025
+```
+
+或：
+
+```yaml
+jobs:
+  - name: MOVIE
+    source_dir: /dld/upload/Movie-2025
+    link_dir: /dld/upload/Movie-2025
+    rclone_remote: gd1:/sync/Movie/Movie-2025
+```
+
+则第 4 步不会创建硬链接，任务 key 和上传文件都是 `/dld/upload/Movie-2025/A/movie.mkv`。rclone 成功返回后不调用 `CleanupLinkedFile`，源文件必须继续保留。
+
 ## 28. 当前实现的边界和注意事项
 
 - 监控依赖 fsnotify，对已存在目录会在启动时递归添加 watch；新建目录会在目录事件中递归添加 watch。
 - 文件稳定性只通过文件大小判断，不校验文件内容是否仍在变化但大小不变。
-- 硬链接要求 `source_dir` 和 `link_dir` 所在文件系统支持 hard link；跨文件系统硬链接会失败。
-- 调度 key 是硬链接文件路径，因此同一路径更新会替换任务，不同路径文件互不影响。
-- 上传失败不会删除硬链接文件，保证可以重试。
-- 达到最大重试次数后任务会停止自动重试，并释放内存状态，但硬链接文件仍保留在 `link_dir`。
-- 程序重启后会扫描 `link_dir`，这些遗留硬链接会再次注册为待上传任务。
+- 独立 `link_dir` 模式要求 `source_dir` 和 `link_dir` 所在文件系统支持 hard link；跨文件系统硬链接会失败。直传源文件模式不需要 hard link。
+- 调度 key 是实际上传文件路径，因此同一路径更新会替换任务，不同路径文件互不影响。
+- 上传失败不会删除上传文件，保证可以重试。
+- 达到最大重试次数后任务会停止自动重试，并释放内存状态，但上传文件仍保留。独立 `link_dir` 模式下保留在 `link_dir`；直传源文件模式下保留源文件。
+- 程序重启后，独立 `link_dir` 模式会扫描 `link_dir`，这些遗留硬链接会再次注册为待上传任务；直传源文件模式会通过源目录扫描重新注册源文件。
+- `link_dir` 为空或等于 `source_dir` 时是合法的直传源文件模式；`link_dir` 位于 `source_dir` 内部但不相等、不同行 job 的 `source_dir` 与非空 `link_dir` 交叉嵌套，都是非法配置。
 - Telegram 通知只在达到最大重试次数时发送；普通重试失败不发送。
 - rclone 输出解析依赖 `INFO  :`、`ETA`、`Copied (` 等文本特征，rclone 输出格式变化可能影响 UI 展示，但不影响上传命令本身。
 - 代理配置会同时用于 rclone 子进程和 Telegram HTTP client；其中 rclone 通过环境变量使用代理，Telegram 通过 HTTP transport 使用代理。
