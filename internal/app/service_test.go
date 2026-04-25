@@ -1066,7 +1066,7 @@ func TestProcessFileUsesSupersedeEventForActiveFileTask(t *testing.T) {
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}
-	if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜检测到同路径文件更新，已取消旧上传并重新排队" {
+	if got := s.recentEvents[0].message; got != "[MOVIE] movie.mkv｜检测到上传中文件继续写入，已取消旧上传并重新排队" {
 		t.Fatalf("recentEvents[0].message = %q, want supersede event", got)
 	}
 }
@@ -1489,10 +1489,11 @@ func TestProcessFileInPlaceSamePathUpdateCancelsActiveUploadWithoutCleanupOrRetr
 		t.Fatal(err)
 	}
 
-	linkPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	linkResult, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("LinkFile() error = %v", err)
 	}
+	linkPath := linkResult.Path
 
 	cfgJob := config.JobConfig{
 		Name:         "MOVIE",
@@ -1588,6 +1589,12 @@ func TestProcessFileInPlaceSamePathUpdateCancelsActiveUploadWithoutCleanupOrRetr
 	if string(gotBytes) != "new-bytes" {
 		t.Fatalf("linked file content = %q, want %q", string(gotBytes), "new-bytes")
 	}
+	if len(s.recentEvents) == 0 {
+		t.Fatal("recentEvents is empty, want same-inode update event")
+	}
+	if got := s.recentEvents[len(s.recentEvents)-1].message; got != "[MOVIE] episode-1.mkv｜检测到上传中文件继续写入，已取消旧上传并重新排队" {
+		t.Fatalf("recentEvents[last].message = %q, want same-inode update event", got)
+	}
 }
 
 func TestProcessFileNewInodeSamePathReplacementCancelsActiveUploadAndRequeuesLatest(t *testing.T) {
@@ -1604,10 +1611,11 @@ func TestProcessFileNewInodeSamePathReplacementCancelsActiveUploadAndRequeuesLat
 		t.Fatal(err)
 	}
 
-	linkPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	linkResult, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("LinkFile() error = %v", err)
 	}
+	linkPath := linkResult.Path
 
 	cfgJob := config.JobConfig{
 		Name:         "MOVIE",
@@ -1687,6 +1695,12 @@ func TestProcessFileNewInodeSamePathReplacementCancelsActiveUploadAndRequeuesLat
 	}
 	if !os.SameFile(sourceInfo, linkInfo) {
 		t.Fatal("replacement link is not a hard link to replacement source")
+	}
+	if len(s.recentEvents) == 0 {
+		t.Fatal("recentEvents is empty, want replacement event")
+	}
+	if got := s.recentEvents[len(s.recentEvents)-1].message; got != "[MOVIE] movie.mkv｜检测到同路径文件被替换，已更新硬链接并重新排队" {
+		t.Fatalf("recentEvents[last].message = %q, want replacement event", got)
 	}
 }
 
@@ -1914,10 +1928,11 @@ func TestProcessFileRetryWaitReplacementClearsFailureCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	linkPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	linkResult, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("LinkFile() error = %v", err)
 	}
+	linkPath := linkResult.Path
 
 	cfgJob := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movie"}
 	s := newTestService()
@@ -1967,10 +1982,11 @@ func TestProcessFileTerminalFailedReplacementResetsFailureCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	linkPath, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	linkResult, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("LinkFile() error = %v", err)
 	}
+	linkPath := linkResult.Path
 
 	cfgJob := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movie"}
 	s := newTestService()

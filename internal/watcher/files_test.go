@@ -22,10 +22,14 @@ func TestLinkFileCreatesParentDirectories(t *testing.T) {
 		t.Fatalf("WriteFile source: %v", err)
 	}
 
-	linkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	result, err := LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("LinkFile() error = %v", err)
 	}
+	if result.State != LinkCreated {
+		t.Fatalf("LinkFile() state = %v, want %v", result.State, LinkCreated)
+	}
+	linkPath := result.Path
 
 	rel, err := filepath.Rel(sourceDir, sourcePath)
 	if err != nil {
@@ -63,14 +67,22 @@ func TestLinkFileIsIdempotentWhenTargetExists(t *testing.T) {
 		t.Fatalf("WriteFile source: %v", err)
 	}
 
-	firstLinkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	firstResult, err := LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("first LinkFile() error = %v", err)
 	}
-	secondLinkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	if firstResult.State != LinkCreated {
+		t.Fatalf("first LinkFile() state = %v, want %v", firstResult.State, LinkCreated)
+	}
+	firstLinkPath := firstResult.Path
+	secondResult, err := LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("second LinkFile() error = %v", err)
 	}
+	if secondResult.State != LinkAlreadySameFile {
+		t.Fatalf("second LinkFile() state = %v, want %v", secondResult.State, LinkAlreadySameFile)
+	}
+	secondLinkPath := secondResult.Path
 	if secondLinkPath != firstLinkPath {
 		t.Fatalf("second LinkFile() path = %q, want %q", secondLinkPath, firstLinkPath)
 	}
@@ -98,10 +110,14 @@ func TestLinkFileReplacesStaleLinkWhenSourcePathGetsNewInode(t *testing.T) {
 		t.Fatalf("WriteFile original source: %v", err)
 	}
 
-	linkPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	result, err := LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("first LinkFile() error = %v", err)
 	}
+	if result.State != LinkCreated {
+		t.Fatalf("first LinkFile() state = %v, want %v", result.State, LinkCreated)
+	}
+	linkPath := result.Path
 
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatalf("Remove original source: %v", err)
@@ -110,10 +126,14 @@ func TestLinkFileReplacesStaleLinkWhenSourcePathGetsNewInode(t *testing.T) {
 		t.Fatalf("WriteFile replacement source: %v", err)
 	}
 
-	relinkedPath, err := LinkFile(sourceDir, linkDir, sourcePath)
+	relinkedResult, err := LinkFile(sourceDir, linkDir, sourcePath)
 	if err != nil {
 		t.Fatalf("second LinkFile() error = %v", err)
 	}
+	if relinkedResult.State != LinkReplacedDifferentFile {
+		t.Fatalf("second LinkFile() state = %v, want %v", relinkedResult.State, LinkReplacedDifferentFile)
+	}
+	relinkedPath := relinkedResult.Path
 	if relinkedPath != linkPath {
 		t.Fatalf("second LinkFile() path = %q, want %q", relinkedPath, linkPath)
 	}

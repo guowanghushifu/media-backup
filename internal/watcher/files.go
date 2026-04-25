@@ -17,32 +17,45 @@ var ErrWaitStableTimeout = errors.New("file did not become stable before timeout
 
 var stableWaitGrace = time.Minute
 
-func LinkFile(sourceDir, linkDir, sourceFile string) (string, error) {
+type LinkState int
+
+const (
+	LinkCreated LinkState = iota
+	LinkAlreadySameFile
+	LinkReplacedDifferentFile
+)
+
+type LinkResult struct {
+	Path  string
+	State LinkState
+}
+
+func LinkFile(sourceDir, linkDir, sourceFile string) (LinkResult, error) {
 	rel, err := filepath.Rel(sourceDir, sourceFile)
 	if err != nil {
-		return "", err
+		return LinkResult{}, err
 	}
 	linkPath := filepath.Join(linkDir, rel)
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
-		return "", err
+		return LinkResult{}, err
 	}
 	if err := os.Link(sourceFile, linkPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			same, err := sameFile(sourceFile, linkPath)
 			if err != nil {
-				return "", err
+				return LinkResult{}, err
 			}
 			if same {
-				return linkPath, nil
+				return LinkResult{Path: linkPath, State: LinkAlreadySameFile}, nil
 			}
 			if err := replaceHardLink(sourceFile, linkPath); err != nil {
-				return "", err
+				return LinkResult{}, err
 			}
-			return linkPath, nil
+			return LinkResult{Path: linkPath, State: LinkReplacedDifferentFile}, nil
 		}
-		return "", err
+		return LinkResult{}, err
 	}
-	return linkPath, nil
+	return LinkResult{Path: linkPath, State: LinkCreated}, nil
 }
 
 func sameFile(sourceFile, targetPath string) (bool, error) {

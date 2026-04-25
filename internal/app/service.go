@@ -95,6 +95,7 @@ type queueTaskState struct {
 	wasQueued        bool
 	clearedRetryWait bool
 	replacedRunning  bool
+	linkState        watcher.LinkState
 }
 
 func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
@@ -332,13 +333,20 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 	}
 	switch {
 	case state.replacedRunning:
-		s.appendSchedulerEventNow(task, "检测到同路径文件更新，已取消旧上传并重新排队")
+		s.appendSchedulerEventNow(task, supersededUploadMessage(state.linkState))
 	case state.clearedRetryWait:
 		s.appendSchedulerEventNow(task, "检测到同路径文件更新，已清除重试等待并重新排队")
 	case !state.wasQueued:
 		s.appendSchedulerEventNow(task, "检测到新文件，任务标记为待上传")
 	}
 	s.signalWake()
+}
+
+func supersededUploadMessage(linkState watcher.LinkState) string {
+	if linkState == watcher.LinkReplacedDifferentFile {
+		return "检测到同路径文件被替换，已更新硬链接并重新排队"
+	}
+	return "检测到上传中文件继续写入，已取消旧上传并重新排队"
 }
 
 func (s *Service) acquireProcessSlot(ctx context.Context) bool {
@@ -431,15 +439,17 @@ func (s *Service) linkAndQueueTask(cfgJob config.JobConfig, sourcePath string) (
 	s.completionMu.Lock()
 	defer s.completionMu.Unlock()
 
-	linkPath, err := watcher.LinkFile(cfgJob.SourceDir, cfgJob.LinkDir, sourcePath)
+	linkResult, err := watcher.LinkFile(cfgJob.SourceDir, cfgJob.LinkDir, sourcePath)
 	if err != nil {
 		return nil, queueTaskState{}, err
 	}
+	linkPath := linkResult.Path
 	resetFailuresForReplacement := s.shouldResetFailureCountForSamePathUpdate(linkPath)
 	task, state, err := s.registerTaskLocked(cfgJob, sourcePath, linkPath)
 	if err != nil {
 		return nil, queueTaskState{}, err
 	}
+	state.linkState = linkResult.State
 	if resetFailuresForReplacement {
 		s.clearFailureCount(linkPath)
 	}
