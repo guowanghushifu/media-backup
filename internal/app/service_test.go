@@ -532,6 +532,67 @@ func TestRunDelaysStartupCatchUpUntilStableDuration(t *testing.T) {
 	}
 }
 
+func TestPrepareStartupSkipsFailedJobAndKeepsHealthyJob(t *testing.T) {
+	t.Parallel()
+
+	badJob := config.JobConfig{Name: "BAD", SourceDir: "/source/bad", LinkDir: "/link/bad"}
+	goodJob := config.JobConfig{Name: "GOOD", SourceDir: "/source/good", LinkDir: "/link/good"}
+	s := newTestService()
+	s.configJobs = map[string]config.JobConfig{
+		badJob.SourceDir:  badJob,
+		goodJob.SourceDir: goodJob,
+	}
+	s.mkdirAll = func(string, os.FileMode) error { return nil }
+	s.addWatches = func(path string) error {
+		if path == badJob.SourceDir {
+			return errors.New("watch failed")
+		}
+		return nil
+	}
+
+	if err := s.prepareStartup(); err != nil {
+		t.Fatalf("prepareStartup() error = %v, want nil with one healthy job", err)
+	}
+	if _, ok := s.configJobs[badJob.SourceDir]; ok {
+		t.Fatalf("bad job remains in configJobs after prepare failure")
+	}
+	if _, ok := s.configJobs[goodJob.SourceDir]; !ok {
+		t.Fatalf("good job missing from configJobs after prepare")
+	}
+	if len(s.recentEvents) == 0 {
+		t.Fatal("recentEvents is empty, want prepare failure event")
+	}
+	foundFailureEvent := false
+	for _, event := range s.recentEvents {
+		if strings.Contains(event.message, "[BAD] 启动准备失败") {
+			foundFailureEvent = true
+			break
+		}
+	}
+	if !foundFailureEvent {
+		t.Fatalf("recentEvents = %+v, want BAD prepare failure event", s.recentEvents)
+	}
+}
+
+func TestPrepareStartupReturnsErrorWhenAllJobsFail(t *testing.T) {
+	t.Parallel()
+
+	job := config.JobConfig{Name: "BAD", SourceDir: "/source/bad", LinkDir: "/link/bad"}
+	s := newTestService()
+	s.configJobs = map[string]config.JobConfig{job.SourceDir: job}
+	s.mkdirAll = func(string, os.FileMode) error {
+		return errors.New("mkdir failed")
+	}
+
+	err := s.prepareStartup()
+	if err == nil {
+		t.Fatal("prepareStartup() error = nil, want all-jobs-failed error")
+	}
+	if !strings.Contains(err.Error(), "BAD") {
+		t.Fatalf("prepareStartup() error = %q, want job name", err.Error())
+	}
+}
+
 func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	t.Parallel()
 
@@ -647,6 +708,69 @@ func TestStartupCatchUpQueuesEachLinkedFileIndividually(t *testing.T) {
 		if _, ok := want[key]; !ok {
 			t.Fatalf("Ready() contains unexpected key %q (all=%v)", key, ready)
 		}
+	}
+}
+
+func TestStartupCatchUpContinuesAfterJobScanError(t *testing.T) {
+	t.Parallel()
+
+	badJob := config.JobConfig{
+		Name:         "BAD",
+		SourceDir:    "/source/bad",
+		LinkDir:      "/link/bad",
+		RcloneRemote: "remote:bad",
+	}
+	goodJob := config.JobConfig{
+		Name:         "GOOD",
+		SourceDir:    "/source/good",
+		LinkDir:      "/link/good",
+		RcloneRemote: "remote:good",
+	}
+	goodUpload := filepath.Join(goodJob.LinkDir, "movie.mkv")
+
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.configJobs = map[string]config.JobConfig{
+		badJob.SourceDir:  badJob,
+		goodJob.SourceDir: goodJob,
+	}
+	s.scanExisting = func(_ context.Context, sourceDir, _ string, _ []string, _ time.Duration, _ time.Duration) (int, error) {
+		if sourceDir == badJob.SourceDir {
+			return 0, errors.New("scan failed")
+		}
+		return 1, nil
+	}
+	s.scanLinkedFiles = func(root string, _ []string) ([]string, error) {
+		if root == goodJob.LinkDir {
+			return []string{goodUpload}, nil
+		}
+		return nil, nil
+	}
+
+	err := s.startupCatchUp(context.Background())
+	if err == nil {
+		t.Fatal("startupCatchUp() error = nil, want aggregated scan error")
+	}
+	if !strings.Contains(err.Error(), "BAD") {
+		t.Fatalf("startupCatchUp() error = %q, want failed job name", err.Error())
+	}
+
+	ready := s.scheduler.Ready()
+	if len(ready) != 1 || ready[0] != goodUpload {
+		t.Fatalf("Ready() = %v, want good job upload %q", ready, goodUpload)
+	}
+	if len(s.recentEvents) == 0 {
+		t.Fatal("recentEvents is empty, want startup failure event")
+	}
+	foundFailureEvent := false
+	for _, event := range s.recentEvents {
+		if strings.Contains(event.message, "[BAD] 启动补偿扫描失败") {
+			foundFailureEvent = true
+			break
+		}
+	}
+	if !foundFailureEvent {
+		t.Fatalf("recentEvents = %+v, want BAD startup failure event", s.recentEvents)
 	}
 }
 

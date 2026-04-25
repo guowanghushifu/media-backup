@@ -88,6 +88,49 @@ func TestScanSkipsLinkDirWhenNestedUnderSource(t *testing.T) {
 	}
 }
 
+func TestScanAndLinkContinuesAfterSingleFileLinkError(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "bad"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourceDir, "good"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "bad", "broken.mkv"), []byte("bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "good", "feature.mkv"), []byte("good"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linkDir, "bad"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := ScanAndLinkContext(context.Background(), sourceDir, linkDir, []string{".mkv"}, time.Millisecond, time.Millisecond)
+	if err == nil {
+		t.Fatal("ScanAndLinkContext() error = nil, want single-file link error")
+	}
+	if count != 1 {
+		t.Fatalf("ScanAndLinkContext() count = %d, want 1 successful link", count)
+	}
+	if !strings.Contains(err.Error(), "broken.mkv") {
+		t.Fatalf("ScanAndLinkContext() error = %q, want failed file path", err.Error())
+	}
+
+	linkedMedia := filepath.Join(linkDir, "good", "feature.mkv")
+	if _, err := os.Stat(linkedMedia); err != nil {
+		t.Fatalf("expected good media file linked at %q: %v", linkedMedia, err)
+	}
+	if _, err := os.Stat(filepath.Join(linkDir, "bad", "broken.mkv")); err == nil {
+		t.Fatal("expected bad media file not linked")
+	}
+}
+
 func TestScanExistingSkipsWaitForOldFiles(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")

@@ -3,6 +3,7 @@ package watcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,9 +51,11 @@ func ScanExistingAndLinkFilesContext(ctx context.Context, sourceDir, linkDir str
 
 func ScanLinkedFiles(root string, extensions []string) ([]string, error) {
 	paths := make([]string, 0)
+	errs := make([]error, 0)
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("%s: %w", path, err))
+			return nil
 		}
 		if d.IsDir() {
 			return nil
@@ -64,17 +67,19 @@ func ScanLinkedFiles(root string, extensions []string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		errs = append(errs, err)
 	}
-	return paths, nil
+	return paths, errors.Join(errs...)
 }
 
 func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func(path string) error) ([]LinkResult, error) {
 	results := make([]LinkResult, 0)
 	cleanLinkDir := filepath.Clean(linkDir)
+	errs := make([]error, 0)
 	err := filepath.WalkDir(sourceDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("%s: %w", path, err))
+			return nil
 		}
 		if d.IsDir() {
 			if !DirectUpload(sourceDir, linkDir) && filepath.Clean(path) == cleanLinkDir {
@@ -90,20 +95,32 @@ func scanAndLink(sourceDir, linkDir string, extensions []string, beforeLink func
 				if errors.Is(err, errSkipUnstableFile) {
 					return nil
 				}
-				return err
+				if isContextError(err) {
+					return err
+				}
+				errs = append(errs, fmt.Errorf("%s: %w", path, err))
+				return nil
 			}
 		}
 		result, err := LinkFile(sourceDir, linkDir, path)
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("%s: %w", path, err))
+			return nil
 		}
 		results = append(results, result)
 		return nil
 	})
-	return results, err
+	if err != nil {
+		errs = append(errs, err)
+	}
+	return results, errors.Join(errs...)
 }
 
 var errSkipUnstableFile = errors.New("skip unstable file")
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
 
 func hasExtension(path string, extensions []string) bool {
 	ext := strings.ToLower(filepath.Ext(path))

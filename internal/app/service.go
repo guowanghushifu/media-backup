@@ -198,15 +198,25 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) prepareStartup() error {
+	errs := make([]error, 0)
+	prepared := 0
 	for _, cfgJob := range s.configJobList() {
 		if !watcher.DirectUpload(cfgJob.SourceDir, cfgJob.LinkDir) {
 			if err := s.mkdirAll(cfgJob.LinkDir, 0o755); err != nil {
-				return err
+				errs = append(errs, s.recordStartupPrepareError(cfgJob, "创建链接目录", err))
+				delete(s.configJobs, cfgJob.SourceDir)
+				continue
 			}
 		}
 		if err := s.addWatches(cfgJob.SourceDir); err != nil {
-			return err
+			errs = append(errs, s.recordStartupPrepareError(cfgJob, "添加目录监控", err))
+			delete(s.configJobs, cfgJob.SourceDir)
+			continue
 		}
+		prepared++
+	}
+	if prepared == 0 && len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
 }
@@ -230,6 +240,7 @@ func (s *Service) delayedStartupCatchUp(ctx context.Context) {
 }
 
 func (s *Service) startupCatchUp(ctx context.Context) error {
+	errs := make([]error, 0)
 	for _, cfgJob := range s.configJobList() {
 		directUpload := watcher.DirectUpload(cfgJob.SourceDir, cfgJob.LinkDir)
 		uploadRoot := cfgJob.LinkDir
@@ -241,7 +252,10 @@ func (s *Service) startupCatchUp(ctx context.Context) error {
 		if directUpload {
 			results, err := s.scanExistingUploadFiles(ctx, cfgJob, uploadRoot)
 			if err != nil {
-				return err
+				if isContextError(err) || ctx.Err() != nil {
+					return err
+				}
+				errs = append(errs, s.recordStartupCatchUpError(cfgJob, "扫描源目录", err))
 			}
 			scannedCount = len(results)
 			uploadFiles = make([]string, 0, len(results))
@@ -251,7 +265,10 @@ func (s *Service) startupCatchUp(ctx context.Context) error {
 		} else {
 			count, err := s.scanExisting(ctx, cfgJob.SourceDir, cfgJob.LinkDir, s.cfg.Extensions, s.cfg.StableDuration, s.cfg.PollInterval)
 			if err != nil {
-				return err
+				if isContextError(err) || ctx.Err() != nil {
+					return err
+				}
+				errs = append(errs, s.recordStartupCatchUpError(cfgJob, "扫描源目录", err))
 			}
 			scannedCount = count
 			scanLinkedFiles := s.scanLinkedFiles
@@ -260,7 +277,10 @@ func (s *Service) startupCatchUp(ctx context.Context) error {
 			}
 			linkFiles, err := scanLinkedFiles(uploadRoot, s.cfg.Extensions)
 			if err != nil {
-				return err
+				if isContextError(err) || ctx.Err() != nil {
+					return err
+				}
+				errs = append(errs, s.recordStartupCatchUpError(cfgJob, "扫描链接目录", err))
 			}
 			uploadFiles = linkFiles
 		}
@@ -273,7 +293,11 @@ func (s *Service) startupCatchUp(ctx context.Context) error {
 				task, err = s.registerTaskByLinkPath(cfgJob, uploadPath)
 			}
 			if err != nil {
-				return err
+				if isContextError(err) || ctx.Err() != nil {
+					return err
+				}
+				errs = append(errs, s.recordStartupCatchUpError(cfgJob, "注册上传任务", err))
+				continue
 			}
 			s.scheduler.MarkDirty(task.key)
 			s.runAfterMarkDirty(task.key)
@@ -287,7 +311,25 @@ func (s *Service) startupCatchUp(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+func (s *Service) recordStartupCatchUpError(cfgJob config.JobConfig, stage string, err error) error {
+	wrapped := fmt.Errorf("[%s] startup catch-up %s failed: %w", cfgJob.Name, stage, err)
+	s.logger.Print(wrapped)
+	s.appendSchedulerEventNow(&jobRuntime{cfg: cfgJob}, fmt.Sprintf("启动补偿扫描失败：%s", err))
+	return wrapped
+}
+
+func (s *Service) recordStartupPrepareError(cfgJob config.JobConfig, stage string, err error) error {
+	wrapped := fmt.Errorf("[%s] startup prepare %s failed: %w", cfgJob.Name, stage, err)
+	s.logger.Print(wrapped)
+	s.appendSchedulerEventNow(&jobRuntime{cfg: cfgJob}, fmt.Sprintf("启动准备失败：%s", err))
+	return wrapped
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (s *Service) scanExistingUploadFiles(ctx context.Context, cfgJob config.JobConfig, uploadRoot string) ([]watcher.LinkResult, error) {

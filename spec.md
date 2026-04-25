@@ -115,7 +115,7 @@
 
 1. 创建可取消的 `runCtx`。
 2. 启动 UI 循环。UI 会在初始扫描前先进入候补屏幕并渲染一次。
-3. 创建必要的独立 `link_dir`，并递归为每个 `source_dir` 添加 fsnotify watch。
+3. 执行启动准备：创建必要的独立 `link_dir`，并递归为每个 `source_dir` 添加 fsnotify watch。启动准备按 job best-effort 执行：单个 job 的 `link_dir` 创建或 `source_dir` 监控失败时，记录日志和最近事件，并从本轮运行配置中跳过该 job；只要至少一个 job 准备成功，服务继续启动。全部 job 准备失败时，`Run` 返回错误。
 4. 启动 `eventLoop` 监听 fsnotify 事件。
 5. 启动 `dispatchLoop` 负责重试释放和上传调度。
 6. 后台等待 `stable_duration` 后执行 `startupCatchUp`，处理启动时已有且足够旧的文件。
@@ -134,6 +134,8 @@
 4. 独立 `link_dir` 模式下，扫描 `link_dir` 中所有允许扩展名的文件。
 5. 将每个待上传文件注册为独立上传任务，并标记为 dirty/待上传。
 6. 如果有待上传文件，写入最近事件：启动扫描发现文件，或链接目录发现待上传文件。
+
+启动补偿按 job best-effort 执行。单个 job 的源目录扫描、链接目录扫描或任务注册失败时，程序记录日志和最近事件，并继续处理其他文件和其他 job。失败会聚合到 `startupCatchUp` 的返回错误中，供后台启动补偿 goroutine 统一写日志；context 取消仍会立即停止。
 
 `ScanExistingAndLink` 的稳定性策略：
 
@@ -216,8 +218,9 @@
 - 扩展名比较不区分大小写。
 - 处理文件前可执行稳定性等待。
 - 独立 `link_dir` 模式下，对匹配文件调用 `LinkFile`；直传源文件模式下，直接返回源文件作为待上传文件。
+- 单个路径的 `WalkDir` 错误、稳定性检查错误或 `LinkFile` 错误会被记录到聚合错误中，但不会中断其他文件扫描；context 取消除外。
 
-`ScanLinkedFiles` 则递归扫描独立 `link_dir`，返回所有允许扩展名的待上传文件路径。直传源文件模式不扫描 `link_dir`。
+`ScanLinkedFiles` 则递归扫描独立 `link_dir`，返回所有允许扩展名的待上传文件路径。单个路径扫描错误会被记录到聚合错误中，并继续扫描其他路径。直传源文件模式不扫描 `link_dir`。
 
 ## 12. 远端目录映射
 
