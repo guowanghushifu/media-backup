@@ -59,6 +59,7 @@
 - 每个 job 的 `name`、`source_dir`、`rclone_remote` 都不能为空。
 - `link_dir` 可以为空；为空时等价于直传源文件模式。
 - `source_dir` 不能重复。
+- 不同 job 的 `source_dir` 不能相互嵌套。
 - 非空 `link_dir` 不能重复。
 - `link_dir` 等于 `source_dir` 时允许，表示直传源文件模式。
 - `link_dir` 位于同一个 job 的 `source_dir` 内部时不允许，除非二者相等。
@@ -103,7 +104,7 @@
 - `processing`：防止同一个源文件被多个 goroutine 重复处理。
 - `retryDue`：记录失败任务下次允许重试的时间。
 - `failureCounts`：记录每个上传文件路径的连续失败次数。
-- `processSem`：限制前置文件处理并发，当前固定最多 32 个文件同时执行稳定等待、上传路径准备和任务注册。
+- `processSem`：限制上传路径准备和任务注册这类短操作并发，当前固定最多 64 个文件同时执行；稳定等待不占用该并发槽。
 - `wakeCh`：唤醒调度循环。
 - `uiWakeCh`：唤醒 UI 刷新。
 - Telegram notifier：仅在配置启用时创建。
@@ -114,11 +115,12 @@
 
 1. 创建可取消的 `runCtx`。
 2. 启动 UI 循环。UI 会在初始扫描前先进入候补屏幕并渲染一次。
-3. 执行 `startupCatchUp`，处理启动时已有文件。
+3. 创建必要的独立 `link_dir`，并递归为每个 `source_dir` 添加 fsnotify watch。
 4. 启动 `eventLoop` 监听 fsnotify 事件。
 5. 启动 `dispatchLoop` 负责重试释放和上传调度。
-6. 等待外层 context 取消。
-7. 取消内部 context，等待 goroutine 退出，关闭 watcher。
+6. 后台等待 `stable_duration` 后执行 `startupCatchUp`，处理启动时已有且足够旧的文件。
+7. 等待外层 context 取消。
+8. 取消内部 context，等待 goroutine 退出，关闭 watcher。
 
 ## 7. 启动补偿扫描
 
@@ -127,21 +129,18 @@
 对每个配置 job：
 
 1. 判断 job 是否为直传源文件模式：`link_dir` 为空或等于 `source_dir`。
-2. 如果不是直传源文件模式，创建 `link_dir`。
-3. 递归为 `source_dir` 下所有目录添加 fsnotify watch。
-4. 扫描源目录中已存在的视频文件。
-5. 独立 `link_dir` 模式下，对扫描到的文件创建硬链接；直传源文件模式下，直接注册源文件。
-6. 独立 `link_dir` 模式下，扫描 `link_dir` 中所有允许扩展名的文件。
-7. 将每个待上传文件注册为独立上传任务，并标记为 dirty/待上传。
-8. 如果有待上传文件，写入最近事件：启动扫描发现文件，或链接目录发现待上传文件。
+2. 扫描源目录中已存在的视频文件。
+3. 独立 `link_dir` 模式下，对扫描到的文件创建硬链接；直传源文件模式下，直接注册源文件。
+4. 独立 `link_dir` 模式下，扫描 `link_dir` 中所有允许扩展名的文件。
+5. 将每个待上传文件注册为独立上传任务，并标记为 dirty/待上传。
+6. 如果有待上传文件，写入最近事件：启动扫描发现文件，或链接目录发现待上传文件。
 
 `ScanExistingAndLink` 的稳定性策略：
 
 - 对旧文件：如果文件修改时间早于 `stable_duration`，不再等待。
-- 对最近修改的文件：继续调用可取消的稳定等待逻辑，等待大小稳定。
-- 如果单个文件持续不稳定超过 `stable_duration + 1m`，启动扫描会跳过该文件并继续扫描后续文件。
+- 对最近修改的文件：直接跳过，交给已经启动的 watcher 处理。
 
-因此，启动时已有且看起来已经写完的文件会更快进入上传；刚写入或仍在写入的文件会等待稳定。
+因此，启动时已有且修改时间早于当前时间减去 `stable_duration` 的文件会进入上传；刚写入或仍在写入的文件不会阻塞启动补偿扫描。
 
 ## 8. 文件监控和事件处理
 
@@ -179,11 +178,11 @@
 3. 按 `poll_interval` 周期检查文件大小。
 4. 只要大小变化，就重置稳定开始时间。
 5. 大小持续不变达到 `stable_duration` 后返回成功。
-6. 如果总等待时间超过 `stable_duration + 1m`，返回稳定等待超时错误。
+6. 如果总等待时间超过 24 小时，返回稳定等待超时错误。
 7. 如果服务 context 被取消，立即返回 context 错误。
 8. 检查过程中 `os.Stat` 失败会返回错误。
 
-如果 `poll_interval <= 0`，函数内部会使用 `100ms` 作为兜底值。运行期处理文件时，稳定等待超时只记录日志并释放该路径，后续文件继续变化产生 fsnotify 事件时会再次触发处理。
+如果 `poll_interval <= 0`，函数内部会使用 `100ms` 作为兜底值。运行期处理文件时，稳定等待不占用 `processSem`；单个文件持续不稳定超过 24 小时后会记录日志并放弃本次处理。
 
 ## 10. 上传路径准备
 
@@ -607,7 +606,7 @@ Service 内部维护 `recentEvents`：
 
 - `Service.mu`：保护运行时任务表、processing、recentEvents、retryDue、failureCounts 等共享状态。
 - `Service.completionMu`：串行化任务注册、上传完成、失败和替换相关的关键路径，避免同路径更新和旧上传完成交错导致误清理。
-- `Service.processSem`：限制最多 32 个文件同时执行前置处理，避免大量不同文件事件同时进入稳定等待和上传路径准备阶段。
+- `Service.processSem`：限制最多 64 个文件同时执行上传路径准备和任务注册，稳定等待不占用该槽位，避免长期写入的大文件阻塞其他已稳定文件入队。
 - `queue.Scheduler.mu`：保护调度器内部状态。
 - `processing`：避免同一个源路径被多个事件同时处理。
 - `wakeCh` 和 `uiWakeCh` 都是容量 1 的 channel，发送时非阻塞；多个唤醒可合并，避免阻塞业务 goroutine。

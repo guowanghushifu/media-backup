@@ -24,7 +24,7 @@ import (
 
 const maxRecentEvents = 10
 const uiKeepaliveInterval = 3 * time.Second
-const maxParallelProcessing = 32
+const maxParallelProcessing = 64
 
 var errUploadSuperseded = errors.New("upload superseded by newer same-path file")
 
@@ -42,6 +42,7 @@ type Service struct {
 	copyJob            func(context.Context, *jobRuntime) error
 	cleanupLinkedFile  func(string, string) error
 	cleanupSourceFile  func(string, string) error
+	waitStable         func(context.Context, string, time.Duration, time.Duration) error
 	startUpload        func(context.Context, *jobRuntime)
 	afterMarkDirty     func(string)
 	beforeProcessFile  func(string)
@@ -131,6 +132,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	}
 	s.addWatches = s.addRecursiveWatches
 	s.copyJob = s.copyWithRclone
+	s.waitStable = watcher.WaitStableContext
 	s.notifyFinalFailure = func(event jobFailureNotification) error {
 		if notifier == nil {
 			return nil
@@ -169,13 +171,13 @@ func (s *Service) Run(ctx context.Context) error {
 		s.uiLoop(runCtx)
 	}()
 
-	if err := s.startupCatchUp(runCtx); err != nil {
+	if err := s.prepareStartup(); err != nil {
 		cancel()
 		wg.Wait()
 		return err
 	}
 
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		s.eventLoop(runCtx)
@@ -184,11 +186,47 @@ func (s *Service) Run(ctx context.Context) error {
 		defer wg.Done()
 		s.dispatchLoop(runCtx)
 	}()
+	go func() {
+		defer wg.Done()
+		s.delayedStartupCatchUp(runCtx)
+	}()
 
 	<-ctx.Done()
 	cancel()
 	wg.Wait()
 	return ctx.Err()
+}
+
+func (s *Service) prepareStartup() error {
+	for _, cfgJob := range s.configJobList() {
+		if !watcher.DirectUpload(cfgJob.SourceDir, cfgJob.LinkDir) {
+			if err := s.mkdirAll(cfgJob.LinkDir, 0o755); err != nil {
+				return err
+			}
+		}
+		if err := s.addWatches(cfgJob.SourceDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) delayedStartupCatchUp(ctx context.Context) {
+	delay := s.cfg.StableDuration
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+	}
+	if err := s.startupCatchUp(ctx); err != nil && ctx.Err() == nil {
+		s.logger.Printf("startup catch-up: %v", err)
+	}
 }
 
 func (s *Service) startupCatchUp(ctx context.Context) error {
@@ -197,11 +235,6 @@ func (s *Service) startupCatchUp(ctx context.Context) error {
 		uploadRoot := cfgJob.LinkDir
 		if directUpload {
 			uploadRoot = cfgJob.SourceDir
-		} else if err := s.mkdirAll(cfgJob.LinkDir, 0o755); err != nil {
-			return err
-		}
-		if err := s.addWatches(cfgJob.SourceDir); err != nil {
-			return err
 		}
 		scannedCount := 0
 		var uploadFiles []string
@@ -351,6 +384,14 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 		s.mu.Unlock()
 	}()
 
+	waitStable := s.waitStable
+	if waitStable == nil {
+		waitStable = watcher.WaitStableContext
+	}
+	if err := waitStable(ctx, path, s.cfg.StableDuration, s.cfg.PollInterval); err != nil {
+		s.logger.Printf("wait stable %s: %v", path, err)
+		return
+	}
 	if !s.acquireProcessSlot(ctx) {
 		return
 	}
@@ -359,10 +400,6 @@ func (s *Service) processFile(ctx context.Context, cfgJob config.JobConfig, path
 		s.beforeProcessFile(path)
 	}
 
-	if err := watcher.WaitStableContext(ctx, path, s.cfg.StableDuration, s.cfg.PollInterval); err != nil {
-		s.logger.Printf("wait stable %s: %v", path, err)
-		return
-	}
 	task, state, err := s.linkAndQueueTask(cfgJob, path)
 	if err != nil {
 		s.logger.Printf("queue task %s: %v", path, err)

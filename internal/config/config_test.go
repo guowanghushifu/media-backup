@@ -279,6 +279,60 @@ jobs:
 	}
 }
 
+func TestLoadConfigRejectsNestedSourceDir(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "parent before child",
+			body: `
+jobs:
+  - name: parent
+    source_dir: /media
+    link_dir: /links/parent
+    rclone_remote: remote:parent
+  - name: child
+    source_dir: /media/movies
+    link_dir: /links/child
+    rclone_remote: remote:child
+`,
+		},
+		{
+			name: "child before parent",
+			body: `
+jobs:
+  - name: child
+    source_dir: /media/movies
+    link_dir: /links/child
+    rclone_remote: remote:child
+  - name: parent
+    source_dir: /media
+    link_dir: /links/parent
+    rclone_remote: remote:parent
+`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeTempConfig(t, tc.body)
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatal("LoadConfig error = nil, want nested source_dir validation error")
+			}
+			if !strings.Contains(err.Error(), "source_dir must not be nested") {
+				t.Fatalf("error = %q, want nested source_dir validation error", err.Error())
+			}
+		})
+	}
+}
+
 func TestLoadConfigNormalizesExtensionsToLowercase(t *testing.T) {
 	t.Parallel()
 

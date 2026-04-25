@@ -188,6 +188,16 @@ func validateConfig(cfg *Config) error {
 			}
 		}
 	}
+	for i, job := range cfg.Jobs {
+		for j, other := range cfg.Jobs {
+			if i == j {
+				continue
+			}
+			if pathInside(job.SourceDir, other.SourceDir) {
+				return fmt.Errorf("source_dir must not be nested: source_dir=%s nested_source_dir=%s", job.SourceDir, other.SourceDir)
+			}
+		}
+	}
 	return nil
 }
 

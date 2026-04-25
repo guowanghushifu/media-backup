@@ -141,7 +141,7 @@ func TestScanExistingSkipsWaitForOldFiles(t *testing.T) {
 	}
 }
 
-func TestScanExistingWaitsForRecentlyModifiedFiles(t *testing.T) {
+func TestScanExistingSkipsRecentlyModifiedFiles(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	linkDir := filepath.Join(root, "link")
@@ -163,17 +163,9 @@ func TestScanExistingWaitsForRecentlyModifiedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var (
-		waitCalls       int
-		gotPath         string
-		gotStableFor    time.Duration
-		gotPollInterval time.Duration
-	)
+	waitCalls := 0
 	waitForScanStable = func(ctx context.Context, path string, stableFor time.Duration, pollInterval time.Duration) error {
 		waitCalls++
-		gotPath = path
-		gotStableFor = stableFor
-		gotPollInterval = pollInterval
 		return nil
 	}
 
@@ -182,26 +174,15 @@ func TestScanExistingWaitsForRecentlyModifiedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanExistingAndLink() error = %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("ScanExistingAndLink() count = %d, want 1", count)
+	if count != 0 {
+		t.Fatalf("ScanExistingAndLink() count = %d, want 0 for recent file", count)
 	}
-	if waitCalls != 1 {
-		t.Fatalf("ScanExistingAndLink() wait calls = %d, want 1", waitCalls)
+	if waitCalls != 0 {
+		t.Fatalf("ScanExistingAndLink() wait calls = %d, want 0", waitCalls)
 	}
-	expectedPath := filepath.Join(sourceDir, "movie", "feature.mkv")
-	if gotPath != expectedPath {
-		t.Fatalf("ScanExistingAndLink() wait path = %q, want %q", gotPath, expectedPath)
-	}
-	if gotStableFor != stableDuration {
-		t.Fatalf("ScanExistingAndLink() stable duration = %v, want %v", gotStableFor, stableDuration)
-	}
-	if gotPollInterval != pollInterval {
-		t.Fatalf("ScanExistingAndLink() poll interval = %v, want %v", gotPollInterval, pollInterval)
-	}
-
 	linkedMedia := filepath.Join(linkDir, "movie", "feature.mkv")
-	if _, err := os.Stat(linkedMedia); err != nil {
-		t.Fatalf("expected linked media file missing at %q: %v", linkedMedia, err)
+	if _, err := os.Stat(linkedMedia); !os.IsNotExist(err) {
+		t.Fatalf("expected recent file not linked at %q, got err=%v", linkedMedia, err)
 	}
 }
 

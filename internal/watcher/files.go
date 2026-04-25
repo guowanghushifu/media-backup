@@ -15,7 +15,7 @@ var errLinkFileOutsideLinkDir = errors.New("link file is outside link dir")
 
 var ErrWaitStableTimeout = errors.New("file did not become stable before timeout")
 
-var stableWaitGrace = time.Minute
+var stableWaitMax = 24 * time.Hour
 
 type LinkState int
 
@@ -187,12 +187,12 @@ func WaitStableContext(ctx context.Context, path string, stableFor time.Duration
 	}
 
 	stableSince := time.Now()
-	deadline := stableSince.Add(stableFor + stableWaitGrace)
+	deadline := stableSince.Add(stableWaitMax)
 	for {
 		if !deadline.IsZero() && time.Now().Add(pollInterval).After(deadline) {
 			pollInterval = time.Until(deadline)
 			if pollInterval <= 0 {
-				return fmt.Errorf("%w: %s after %s", ErrWaitStableTimeout, path, stableFor+stableWaitGrace)
+				return fmt.Errorf("%w: %s after %s", ErrWaitStableTimeout, path, stableWaitMax)
 			}
 		}
 		timer := time.NewTimer(pollInterval)
@@ -220,7 +220,7 @@ func WaitStableContext(ctx context.Context, path string, stableFor time.Duration
 			return nil
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("%w: %s after %s", ErrWaitStableTimeout, path, stableFor+stableWaitGrace)
+			return fmt.Errorf("%w: %s after %s", ErrWaitStableTimeout, path, stableWaitMax)
 		}
 	}
 }

@@ -404,7 +404,7 @@ func TestRunUILoopRefreshesImmediatelyOnUIWake(t *testing.T) {
 	}
 }
 
-func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
+func TestRunStartsUILoopBeforeStartupCatchUpBegins(t *testing.T) {
 	t.Parallel()
 
 	sourceDir := t.TempDir()
@@ -434,8 +434,6 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 	s.now = func() time.Time { return start }
 
 	scanStarted := make(chan struct{})
-	releaseScan := make(chan struct{})
-	scanReturned := make(chan struct{})
 	s.mkdirAll = func(string, os.FileMode) error {
 		return nil
 	}
@@ -444,8 +442,6 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 	}
 	s.scanExisting = func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error) {
 		close(scanStarted)
-		<-releaseScan
-		close(scanReturned)
 		return 0, nil
 	}
 	s.scanLinkedFiles = func(string, []string) ([]string, error) { return nil, nil }
@@ -458,17 +454,11 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 		errCh <- s.Run(ctx)
 	}()
 
-	select {
-	case <-scanStarted:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for startup scan to begin")
-	}
-
 	writer.waitForWrites(t, 2)
 
 	select {
-	case <-scanReturned:
-		t.Fatal("startup scan returned before test released it")
+	case <-scanStarted:
+		t.Fatal("startup catch-up began before stable_duration elapsed")
 	default:
 	}
 
@@ -478,9 +468,65 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 		t.Fatalf("startup UI output before scan completes = %q, want %q", got, want)
 	}
 
-	close(releaseScan)
 	cancel()
 
+	if err := <-errCh; err != context.Canceled {
+		t.Fatalf("Run() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestRunDelaysStartupCatchUpUntilStableDuration(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := t.TempDir()
+	linkDir := filepath.Join(t.TempDir(), "links")
+	cfg := &config.Config{
+		MaxParallelUploads: 1,
+		StableDuration:     50 * time.Millisecond,
+		Jobs: []config.JobConfig{
+			{
+				Name:      "movie",
+				SourceDir: sourceDir,
+				LinkDir:   linkDir,
+			},
+		},
+		Extensions: []string{".mkv"},
+	}
+
+	s, err := NewService(cfg, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	s.uiWriter = io.Discard
+	s.mkdirAll = func(string, os.FileMode) error { return nil }
+	s.addWatches = func(string) error { return nil }
+	scanStarted := make(chan struct{})
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error) {
+		close(scanStarted)
+		return 0, nil
+	}
+	s.scanLinkedFiles = func(string, []string) ([]string, error) { return nil, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx)
+	}()
+
+	select {
+	case <-scanStarted:
+		t.Fatal("startup catch-up began before stable_duration elapsed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	select {
+	case <-scanStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for delayed startup catch-up")
+	}
+
+	cancel()
 	if err := <-errCh; err != context.Canceled {
 		t.Fatalf("Run() error = %v, want %v", err, context.Canceled)
 	}
@@ -493,7 +539,7 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	linkDir := filepath.Join(t.TempDir(), "links")
 	cfg := &config.Config{
 		MaxParallelUploads: 1,
-		StableDuration:     90 * time.Second,
+		StableDuration:     time.Millisecond,
 		Jobs: []config.JobConfig{
 			{
 				Name:      "movie",
@@ -853,6 +899,95 @@ func TestProcessFileDirectUploadQueuesSourceFileWhenLinkDirEmpty(t *testing.T) {
 	if task.linkPath != sourcePath {
 		t.Fatalf("task.linkPath = %q, want source path %q", task.linkPath, sourcePath)
 	}
+}
+
+func TestNewServiceUsesLargerProcessingLimit(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		MaxParallelUploads: 1,
+		Jobs: []config.JobConfig{
+			{Name: "movie", SourceDir: t.TempDir(), LinkDir: filepath.Join(t.TempDir(), "links")},
+		},
+	}
+	s, err := NewService(cfg, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	defer s.Close()
+
+	if got := cap(s.processSem); got != 64 {
+		t.Fatalf("processSem capacity = %d, want 64", got)
+	}
+}
+
+func TestProcessFileStableWaitDoesNotOccupyProcessingSlot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	fileA := filepath.Join(sourceDir, "a.mkv")
+	fileB := filepath.Join(sourceDir, "b.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{fileA, fileB} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	job := config.JobConfig{Name: "MOVIE", SourceDir: sourceDir, LinkDir: linkDir, RcloneRemote: "remote:movies"}
+	s := newTestService()
+	s.cfg.Extensions = []string{".mkv"}
+	s.cfg.StableDuration = time.Millisecond
+	s.cfg.PollInterval = time.Millisecond
+	s.processSem = make(chan struct{}, 1)
+
+	waitingA := make(chan struct{}, 1)
+	releaseA := make(chan struct{})
+	s.waitStable = func(_ context.Context, path string, _ time.Duration, _ time.Duration) error {
+		if path == fileA {
+			waitingA <- struct{}{}
+			<-releaseA
+		}
+		return nil
+	}
+
+	entered := make(chan string, 2)
+	s.beforeProcessFile = func(path string) {
+		entered <- path
+	}
+
+	doneA := make(chan struct{})
+	go func() {
+		defer close(doneA)
+		s.processFile(context.Background(), job, fileA)
+	}()
+	select {
+	case <-waitingA:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fileA stable wait")
+	}
+
+	doneB := make(chan struct{})
+	go func() {
+		defer close(doneB)
+		s.processFile(context.Background(), job, fileB)
+	}()
+	select {
+	case got := <-entered:
+		if got != fileB {
+			t.Fatalf("first processing slot entrant = %q, want %q", got, fileB)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fileB did not acquire processing slot while fileA waited for stability")
+	}
+
+	close(releaseA)
+	<-doneA
+	<-doneB
 }
 
 func TestProcessFileLimitsConcurrentProcessing(t *testing.T) {

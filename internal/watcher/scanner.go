@@ -42,11 +42,7 @@ func ScanExistingAndLinkFilesContext(ctx context.Context, sourceDir, linkDir str
 			return err
 		}
 		if stableDuration > 0 && time.Since(info.ModTime()) < stableDuration {
-			err := waitForScanStable(ctx, path, stableDuration, pollInterval)
-			if errors.Is(err, ErrWaitStableTimeout) {
-				return errSkipUnstableFile
-			}
-			return err
+			return errSkipUnstableFile
 		}
 		return nil
 	})

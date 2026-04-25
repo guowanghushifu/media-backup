@@ -370,9 +370,9 @@ func TestWaitStableContextReturnsOnCancel(t *testing.T) {
 }
 
 func TestWaitStableContextReturnsAfterMaxWait(t *testing.T) {
-	originalGrace := stableWaitGrace
-	stableWaitGrace = 30 * time.Millisecond
-	t.Cleanup(func() { stableWaitGrace = originalGrace })
+	originalMaxWait := stableWaitMax
+	stableWaitMax = 70 * time.Millisecond
+	t.Cleanup(func() { stableWaitMax = originalMaxWait })
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "growing.file")
@@ -410,7 +410,7 @@ func TestWaitStableContextReturnsAfterMaxWait(t *testing.T) {
 	if !errors.Is(err, ErrWaitStableTimeout) {
 		t.Fatalf("WaitStableContext() error = %v, want ErrWaitStableTimeout", err)
 	}
-	if elapsed := time.Since(start); elapsed < stableFor+stableWaitGrace {
-		t.Fatalf("WaitStableContext() returned after %v, want at least %v", elapsed, stableFor+stableWaitGrace)
+	if elapsed := time.Since(start); elapsed < stableWaitMax {
+		t.Fatalf("WaitStableContext() returned after %v, want at least %v", elapsed, stableWaitMax)
 	}
 }
