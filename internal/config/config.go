@@ -47,10 +47,11 @@ type ProxyConfig struct {
 }
 
 type JobConfig struct {
-	Name         string `yaml:"name"`
-	SourceDir    string `yaml:"source_dir"`
-	LinkDir      string `yaml:"link_dir"`
-	RcloneRemote string `yaml:"rclone_remote"`
+	Name                    string `yaml:"name"`
+	SourceDir               string `yaml:"source_dir"`
+	LinkDir                 string `yaml:"link_dir"`
+	RcloneRemote            string `yaml:"rclone_remote"`
+	DeleteSourceAfterUpload bool   `yaml:"delete_source_after_upload"`
 }
 
 type TelegramConfig struct {

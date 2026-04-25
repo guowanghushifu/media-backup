@@ -41,7 +41,10 @@ jobs:
     source_dir: /dld/upload/4K.REMUX.SGNB
     link_dir: /dld/gd_upload/4K.REMUX.SGNB
     rclone_remote: gd1:/sync/Movie/4K.REMUX.SGNB
+    # 上传成功后是否删除源文件，默认 false
+    delete_source_after_upload: false
   - name: MOVIE
     source_dir: /dld/upload/Movie-2025
     link_dir: /dld/gd_upload/Movie-2025
     rclone_remote: gd1:/sync/Movie/Movie-2025
+    delete_source_after_upload: false

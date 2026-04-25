@@ -72,6 +72,47 @@ jobs:
 	}
 }
 
+func TestLoadConfigDefaultsDeleteSourceAfterUploadToFalse(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.Jobs[0].DeleteSourceAfterUpload {
+		t.Fatal("DeleteSourceAfterUpload = true, want default false")
+	}
+}
+
+func TestLoadConfigParsesDeleteSourceAfterUpload(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+    delete_source_after_upload: true
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if !cfg.Jobs[0].DeleteSourceAfterUpload {
+		t.Fatal("DeleteSourceAfterUpload = false, want true")
+	}
+}
+
 func TestLoadConfigRejectsNegativeMaxRetryCount(t *testing.T) {
 	t.Parallel()
 

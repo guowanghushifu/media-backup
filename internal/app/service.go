@@ -41,6 +41,7 @@ type Service struct {
 	scanLinkedFiles    func(string, []string) ([]string, error)
 	copyJob            func(context.Context, *jobRuntime) error
 	cleanupLinkedFile  func(string, string) error
+	cleanupSourceFile  func(string, string) error
 	startUpload        func(context.Context, *jobRuntime)
 	afterMarkDirty     func(string)
 	beforeProcessFile  func(string)
@@ -117,6 +118,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		scanExistingFiles: watcher.ScanExistingAndLinkFilesContext,
 		scanLinkedFiles:   watcher.ScanLinkedFiles,
 		cleanupLinkedFile: watcher.CleanupLinkedFile,
+		cleanupSourceFile: watcher.CleanupSourceFile,
 		now:               time.Now,
 		configJobs:        make(map[string]config.JobConfig, len(cfg.Jobs)),
 		jobs:              make(map[string]*jobRuntime),
@@ -630,28 +632,52 @@ func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
 	job.summary = "上传完成"
 	s.mu.Unlock()
 
-	if watcher.DirectUpload(job.cfg.SourceDir, job.cfg.LinkDir) {
-		s.finishUploadSuccessLocked(job)
-		return
+	if job.cfg.DeleteSourceAfterUpload {
+		if err := s.cleanupUploadedSourceFile(job); err != nil {
+			s.logger.Printf("cleanup source file %s (root %s): %v", job.sourcePath, job.cfg.SourceDir, err)
+			s.finishUploadFailureLocked(job, fmt.Sprintf("清理源文件失败: %v", err))
+			return
+		}
 	}
 
-	if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
-			s.finishUploadSuccessLocked(job)
+	if !watcher.DirectUpload(job.cfg.SourceDir, job.cfg.LinkDir) {
+		if err := s.cleanupLinkedFile(job.cfg.LinkDir, job.linkPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
+				s.finishUploadSuccessLocked(job)
+				return
+			}
+			if _, statErr := os.Lstat(job.linkPath); errors.Is(statErr, os.ErrNotExist) {
+				s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
+				s.finishUploadSuccessLocked(job)
+				return
+			}
+			s.logger.Printf("cleanup linked file %s (root %s): %v", job.linkPath, job.cfg.LinkDir, err)
+			s.finishUploadFailureLocked(job, fmt.Sprintf("清理失败: %v", err))
 			return
 		}
-		if _, statErr := os.Lstat(job.linkPath); errors.Is(statErr, os.ErrNotExist) {
-			s.logger.Printf("cleanup linked file %s (root %s): %v; linked file already removed, treating upload as complete", job.linkPath, job.cfg.LinkDir, err)
-			s.finishUploadSuccessLocked(job)
-			return
-		}
-		s.logger.Printf("cleanup linked file %s (root %s): %v", job.linkPath, job.cfg.LinkDir, err)
-		s.finishUploadFailureLocked(job, fmt.Sprintf("清理失败: %v", err))
-		return
 	}
 
 	s.finishUploadSuccessLocked(job)
+}
+
+func (s *Service) cleanupUploadedSourceFile(job *jobRuntime) error {
+	cleanupSourceFile := s.cleanupSourceFile
+	if cleanupSourceFile == nil {
+		cleanupSourceFile = watcher.CleanupSourceFile
+	}
+	if err := cleanupSourceFile(job.cfg.SourceDir, job.sourcePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			s.logger.Printf("cleanup source file %s (root %s): %v; source file already removed, treating source cleanup as complete", job.sourcePath, job.cfg.SourceDir, err)
+			return nil
+		}
+		if _, statErr := os.Lstat(job.sourcePath); errors.Is(statErr, os.ErrNotExist) {
+			s.logger.Printf("cleanup source file %s (root %s): %v; source file already removed, treating source cleanup as complete", job.sourcePath, job.cfg.SourceDir, err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) finishUploadFailure(job *jobRuntime, summary string) {

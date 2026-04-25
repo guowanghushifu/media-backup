@@ -109,8 +109,16 @@ func replaceHardLink(sourceFile, targetPath string) error {
 }
 
 func CleanupLinkedFile(linkDir, linkFile string) error {
-	cleanRoot := filepath.Clean(linkDir)
-	cleanFile := filepath.Clean(linkFile)
+	return cleanupFileInRoot(linkDir, linkFile)
+}
+
+func CleanupSourceFile(sourceDir, sourceFile string) error {
+	return cleanupFileInRoot(sourceDir, sourceFile)
+}
+
+func cleanupFileInRoot(root, file string) error {
+	cleanRoot := filepath.Clean(root)
+	cleanFile := filepath.Clean(file)
 
 	rel, err := filepath.Rel(cleanRoot, cleanFile)
 	if err != nil {

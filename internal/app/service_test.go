@@ -1612,6 +1612,103 @@ func TestRunUploadSuccessKeepsSourceFileForDirectUpload(t *testing.T) {
 	}
 }
 
+func TestRunUploadSuccessDeletesSourceFileWhenConfiguredForDirectUpload(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("source-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestService()
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.cleanupLinkedFile = func(string, string) error {
+		t.Fatal("cleanupLinkedFile called for direct upload")
+		return nil
+	}
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:                    "MOVIE",
+			SourceDir:               sourceDir,
+			LinkDir:                 "",
+			RcloneRemote:            "remote:movie",
+			DeleteSourceAfterUpload: true,
+		},
+		key:        sourcePath,
+		sourcePath: sourcePath,
+		linkPath:   sourcePath,
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source file still exists or wrong error = %v, want not exist", err)
+	}
+}
+
+func TestRunUploadSuccessDeletesSourceAndLinkedFileWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	linkDir := filepath.Join(root, "link")
+	sourcePath := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("source-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkResult, err := watcher.LinkFile(sourceDir, linkDir, sourcePath)
+	if err != nil {
+		t.Fatalf("LinkFile() error = %v", err)
+	}
+
+	s := newTestService()
+	s.copyJob = func(context.Context, *jobRuntime) error { return nil }
+	s.cleanupLinkedFile = watcher.CleanupLinkedFile
+	job := &jobRuntime{
+		cfg: config.JobConfig{
+			Name:                    "MOVIE",
+			SourceDir:               sourceDir,
+			LinkDir:                 linkDir,
+			RcloneRemote:            "remote:movie",
+			DeleteSourceAfterUpload: true,
+		},
+		key:        linkResult.Path,
+		sourcePath: sourcePath,
+		linkPath:   linkResult.Path,
+		remoteDir:  "remote:movie/",
+		active:     true,
+	}
+	s.jobs[job.key] = job
+	s.scheduler.MarkDirty(job.key)
+	if !s.scheduler.TryStart(job.key) {
+		t.Fatal("TryStart() = false, want true")
+	}
+
+	s.runUpload(context.Background(), job)
+
+	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source file still exists or wrong error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(linkResult.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("linked file still exists or wrong error = %v, want not exist", err)
+	}
+}
+
 func TestProcessFileInPlaceSamePathUpdateCancelsActiveUploadWithoutCleanupOrRetry(t *testing.T) {
 	t.Parallel()
 

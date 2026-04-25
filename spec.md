@@ -10,7 +10,7 @@
 4. 为每个待上传文件注册独立上传任务。
 5. 通过内部调度器控制并发、重试和同路径文件替换。
 6. 调用 `rclone copy <upload_file> <remote_dir>/ ...args` 上传单个文件。
-7. 上传成功后，如果任务使用独立 `link_dir`，删除该硬链接文件并清理空的父目录；如果任务直传源文件，则保留源文件，不执行上传后文件清理。
+7. 上传成功后，如果任务使用独立 `link_dir`，删除该硬链接文件并清理空的父目录；源文件是否删除由 job 的 `delete_source_after_upload` 控制，默认保留源文件。
 8. 在终端实时展示活动任务、排队数和最近事件；同时写入按天轮转的日志。
 9. 可选地在达到最大重试次数后发送 Telegram 最终失败通知。
 
@@ -51,6 +51,7 @@
 - `source_dir`：源目录，程序递归监控这里的文件。
 - `link_dir`：硬链接目录。为空或等于 `source_dir` 时启用直传源文件模式，不创建硬链接；非空且不同于 `source_dir` 时，程序将待上传文件硬链接到这里。
 - `rclone_remote`：rclone 远端根目录。
+- `delete_source_after_upload`：上传成功后是否删除源文件。默认 `false`，表示保留源文件；设为 `true` 时，上传成功后的源文件清理由该开关控制，与是否直传无关。
 
 配置校验要求：
 
@@ -204,7 +205,7 @@
 
 这样可以支持“同一路径的视频文件被新 inode 替换”的场景，并尽量避免上传目录中出现半成品状态。
 
-直传源文件模式下，上传成功后不能删除 `uploadPath`，因为它就是源文件。
+直传源文件模式下，`uploadPath` 就是源文件；上传成功后是否删除它由 `delete_source_after_upload` 控制。
 
 ## 11. 源目录扫描
 
@@ -253,7 +254,7 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 - `key`：任务 key，当前实现为实际上传文件路径。
 - `sourcePath`：源文件路径。
 - `uploadPath`：实际传给 rclone 的本地文件路径。独立 `link_dir` 模式下是硬链接文件路径；直传源文件模式下是源文件路径。
-- `linkPath`：硬链接文件路径，仅独立 `link_dir` 模式有意义；直传源文件模式下可与 `sourcePath`/`uploadPath` 相同或为空，但不能触发上传后删除。
+- `linkPath`：硬链接文件路径，仅独立 `link_dir` 模式有意义；直传源文件模式下可与 `sourcePath`/`uploadPath` 相同或为空。
 - `remoteDir`：该文件应该上传到的 rclone 远端目录。
 - `summary`：UI 展示的上传摘要。
 - `active`：是否正在上传。
@@ -426,15 +427,16 @@ rclone 返回成功后：
 
 1. 如果 context cause 是 `errUploadSuperseded`，按“被新文件替换”处理。
 2. 否则将任务标记为 inactive，summary 设为“上传完成”。
-3. 如果任务是独立 `link_dir` 模式，调用 `CleanupLinkedFile(linkDir, uploadPath)` 删除硬链接文件。
-4. 独立 `link_dir` 模式下，删除后向上清理空父目录，但不会删除 `link_dir` 根目录。
-5. 如果任务是直传源文件模式，跳过 `CleanupLinkedFile`，必须保留源文件。
-6. 清理成功或跳过清理后，清空失败计数。
-7. 调度器 `Finish(key, false)`。
-8. 如果任务已无 queued/running/retry 状态，调用 `Forget` 并从 `jobs` 删除。
-9. 记录“上传完成，任务清空”或“上传完成，任务保留”。
+3. 如果 `delete_source_after_upload = true`，删除 `sourcePath` 对应的源文件，并向上清理空父目录，但不会删除 `source_dir` 根目录。
+4. 如果任务是独立 `link_dir` 模式，调用 `CleanupLinkedFile(linkDir, uploadPath)` 删除硬链接文件。
+5. 独立 `link_dir` 模式下，删除后向上清理空父目录，但不会删除 `link_dir` 根目录。
+6. 如果任务是直传源文件模式，跳过独立 `link_dir` 的硬链接清理；源文件是否删除只由 `delete_source_after_upload` 决定。
+7. 清理成功或跳过清理后，清空失败计数。
+8. 调度器 `Finish(key, false)`。
+9. 如果任务已无 queued/running/retry 状态，调用 `Forget` 并从 `jobs` 删除。
+10. 记录“上传完成，任务清空”或“上传完成，任务保留”。
 
-独立 `link_dir` 模式下，如果清理时发现硬链接文件已经不存在，程序记录日志，但仍视为上传完成。直传源文件模式下不应因为上传成功而删除或移动源文件。
+独立 `link_dir` 模式下，如果清理时发现硬链接文件已经不存在，程序记录日志，但仍视为上传完成。如果源文件清理发现源文件已经不存在，也记录日志并视为源文件清理完成。
 
 ### 17.3 失败路径
 
@@ -456,13 +458,18 @@ rclone 返回错误时：
    - 记录“上传失败，达到最大重试次数，停止重试”。
    - 清理该 key 的内存状态，包括运行时任务、失败计数、重试时间和调度器终态状态。
    - 如果启用 Telegram，发送最终失败通知。
-5. 失败时不会删除上传文件。独立 `link_dir` 模式下，硬链接文件保留以便重试；直传源文件模式下，源文件本来就必须保留。达到重试上限后，文件仍保留，等待新事件或重启扫描重新注册。
+5. 失败时不会删除上传文件。独立 `link_dir` 模式下，硬链接文件保留以便重试；直传源文件模式下，源文件保留以便重试。达到重试上限后，文件仍保留，等待新事件或重启扫描重新注册。
 
 `max_retry_count = 0` 表示无限重试。对于大于 0 的值，当前实现中 `failures < max_retry_count` 时继续重试，达到该次数时停止。
 
 ## 18. 上传后清理
 
-`watcher.CleanupLinkedFile` 只允许删除独立 `link_dir` 内部的硬链接文件：
+上传后清理分为两类：
+
+- `watcher.CleanupLinkedFile` 删除独立 `link_dir` 内部的硬链接文件，用于清空上传缓冲区。
+- `watcher.CleanupSourceFile` 删除 `source_dir` 内部的源文件，仅在 `delete_source_after_upload = true` 时执行。
+
+二者都只允许删除各自根目录内部的文件：
 
 1. 对 `linkDir` 和 `linkFile` 做 clean。
 2. 计算相对路径。
@@ -471,7 +478,7 @@ rclone 返回错误时：
 5. 从该文件父目录开始，逐级删除空目录。
 6. 遇到非空目录或到达 `link_dir` 根目录时停止。
 
-这个逻辑保证上传完成只清理上传缓冲区中的硬链接，不会删除源文件，也不会删除 `link_dir` 根目录。直传源文件模式必须完全跳过该清理逻辑。
+这个逻辑保证上传完成时，硬链接缓冲区清理由独立 `link_dir` 模式决定，源文件清理由 `delete_source_after_upload` 决定；清理空目录时不会删除 `link_dir` 或 `source_dir` 根目录。
 
 ## 19. rclone 输出解析
 
@@ -608,7 +615,7 @@ Service 内部维护 `recentEvents`：
 特别重要的是同路径替换场景：
 
 - 如果同一路径文件在上传中被新文件替换，旧上传会被 cancel cause 标记为 superseded。
-- 旧上传结束后不会删除上传文件。独立 `link_dir` 模式下，硬链接路径可能已经指向新文件；直传源文件模式下，上传路径就是源文件，任何情况下都不能因 superseded 清理而删除。
+- 旧上传结束后不会删除上传文件。独立 `link_dir` 模式下，硬链接路径可能已经指向新文件；直传源文件模式下，上传路径就是源文件。源文件删除只在最新任务成功完成且 `delete_source_after_upload = true` 时发生。
 - 调度器重新排队同一个 key，确保上传最新文件。
 
 ## 25. 退出行为
@@ -642,6 +649,7 @@ jobs:
     source_dir: /dld/upload/Movie-2025
     link_dir: /dld/gd_upload/Movie-2025
     rclone_remote: gd1:/sync/Movie/Movie-2025
+    delete_source_after_upload: false
 ```
 
 当 `/dld/upload/Movie-2025/A/movie.mkv` 写入完成后：
@@ -665,7 +673,7 @@ rclone copy /dld/gd_upload/Movie-2025/A/movie.mkv gd1:/sync/Movie/Movie-2025/A/ 
 10. rclone 输出进度时，UI 活动任务行更新。
 11. rclone 成功返回后，删除硬链接 `/dld/gd_upload/Movie-2025/A/movie.mkv`。
 12. 如果 `A` 目录为空，也会删除 `/dld/gd_upload/Movie-2025/A`。
-13. 源文件 `/dld/upload/Movie-2025/A/movie.mkv` 不会被删除。
+13. 因为 `delete_source_after_upload: false`，源文件 `/dld/upload/Movie-2025/A/movie.mkv` 不会被删除。
 14. 任务从调度器和运行时任务表清空，UI 记录完成事件。
 
 如果该 job 配置为直传源文件模式：
@@ -676,6 +684,7 @@ jobs:
     source_dir: /dld/upload/Movie-2025
     link_dir: ""
     rclone_remote: gd1:/sync/Movie/Movie-2025
+    delete_source_after_upload: false
 ```
 
 或：
@@ -686,9 +695,10 @@ jobs:
     source_dir: /dld/upload/Movie-2025
     link_dir: /dld/upload/Movie-2025
     rclone_remote: gd1:/sync/Movie/Movie-2025
+    delete_source_after_upload: false
 ```
 
-则第 4 步不会创建硬链接，任务 key 和上传文件都是 `/dld/upload/Movie-2025/A/movie.mkv`。rclone 成功返回后不调用 `CleanupLinkedFile`，源文件必须继续保留。
+则第 4 步不会创建硬链接，任务 key 和上传文件都是 `/dld/upload/Movie-2025/A/movie.mkv`。rclone 成功返回后不调用 `CleanupLinkedFile`；源文件是否删除只看 `delete_source_after_upload`。上例为 `false`，因此继续保留源文件。
 
 ## 28. 当前实现的边界和注意事项
 
@@ -697,7 +707,7 @@ jobs:
 - 独立 `link_dir` 模式要求 `source_dir` 和 `link_dir` 所在文件系统支持 hard link；跨文件系统硬链接会失败。直传源文件模式不需要 hard link。
 - 调度 key 是实际上传文件路径，因此同一路径更新会替换任务，不同路径文件互不影响。
 - 上传失败不会删除上传文件，保证可以重试。
-- 达到最大重试次数后任务会停止自动重试，并释放内存状态，但上传文件仍保留。独立 `link_dir` 模式下保留在 `link_dir`；直传源文件模式下保留源文件。
+- 达到最大重试次数后任务会停止自动重试，并释放内存状态，但上传文件仍保留。独立 `link_dir` 模式下保留在 `link_dir`；直传源文件模式下保留源文件。源文件只会在上传成功且 `delete_source_after_upload = true` 时删除。
 - 程序重启后，独立 `link_dir` 模式会扫描 `link_dir`，这些遗留硬链接会再次注册为待上传任务；直传源文件模式会通过源目录扫描重新注册源文件。
 - `link_dir` 为空或等于 `source_dir` 时是合法的直传源文件模式；`link_dir` 位于 `source_dir` 内部但不相等、不同行 job 的 `source_dir` 与非空 `link_dir` 交叉嵌套，都是非法配置。
 - Telegram 通知只在达到最大重试次数时发送；普通重试失败不发送。
