@@ -85,19 +85,6 @@ func replaceHardLink(sourceFile, targetPath string) error {
 	return os.ErrExist
 }
 
-func CleanupLinkDir(linkDir string) error {
-	entries, err := os.ReadDir(linkDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(linkDir, entry.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func CleanupLinkedFile(linkDir, linkFile string) error {
 	cleanRoot := filepath.Clean(linkDir)
 	cleanFile := filepath.Clean(linkFile)

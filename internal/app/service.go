@@ -36,7 +36,7 @@ type Service struct {
 	uiWriter           io.Writer
 	mkdirAll           func(string, os.FileMode) error
 	addWatches         func(string) error
-	scanExisting       func(context.Context, string, string, []string, time.Duration) (int, error)
+	scanExisting       func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error)
 	scanLinkedFiles    func(string, []string) ([]string, error)
 	copyJob            func(context.Context, *jobRuntime) error
 	cleanupLinkedFile  func(string, string) error
@@ -107,7 +107,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	s := &Service{
 		cfg:               cfg,
 		logger:            logger,
-		scheduler:         queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads, RetryInterval: cfg.RetryInterval}),
+		scheduler:         queue.New(queue.Options{MaxParallel: cfg.MaxParallelUploads}),
 		watcher:           fsWatcher,
 		uiWriter:          os.Stdout,
 		mkdirAll:          os.MkdirAll,
@@ -194,7 +194,7 @@ func (s *Service) startupCatchUp(ctx context.Context) error {
 		if err := s.addWatches(cfgJob.SourceDir); err != nil {
 			return err
 		}
-		scannedCount, err := s.scanExisting(ctx, cfgJob.SourceDir, cfgJob.LinkDir, s.cfg.Extensions, s.cfg.StableDuration)
+		scannedCount, err := s.scanExisting(ctx, cfgJob.SourceDir, cfgJob.LinkDir, s.cfg.Extensions, s.cfg.StableDuration, s.cfg.PollInterval)
 		if err != nil {
 			return err
 		}
@@ -413,9 +413,6 @@ func (s *Service) registerTaskLocked(cfgJob config.JobConfig, sourcePath, linkPa
 	}
 	s.mu.Unlock()
 
-	if state.clearedRetryWait {
-		s.scheduler.RetryJob(linkPath)
-	}
 	if cancelRunning != nil {
 		cancelRunning(errUploadSuperseded)
 	}
@@ -539,10 +536,9 @@ func (s *Service) releaseRetries() {
 	s.mu.Unlock()
 
 	for _, key := range due {
-		if s.scheduler.RetryJob(key) {
-			if job := s.taskForKey(key); job != nil {
-				s.appendSchedulerEventNow(job, "到达重试时间，重新排队")
-			}
+		if job := s.taskForKey(key); job != nil {
+			s.scheduler.MarkDirty(key)
+			s.appendSchedulerEventNow(job, "到达重试时间，重新排队")
 			s.signalWake()
 		}
 	}

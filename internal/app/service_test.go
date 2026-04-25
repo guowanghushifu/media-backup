@@ -442,7 +442,7 @@ func TestRunStartsUILoopBeforeInitialScanCompletes(t *testing.T) {
 	s.addWatches = func(string) error {
 		return nil
 	}
-	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) {
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error) {
 		close(scanStarted)
 		<-releaseScan
 		close(scanReturned)
@@ -524,7 +524,7 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	s.scanExisting = func(ctx context.Context, gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration) (int, error) {
+	s.scanExisting = func(ctx context.Context, gotSourceDir, gotLinkDir string, gotExtensions []string, gotStableDuration time.Duration, gotPollInterval time.Duration) (int, error) {
 		if gotSourceDir != sourceDir {
 			t.Fatalf("scanExisting sourceDir = %q, want %q", gotSourceDir, sourceDir)
 		}
@@ -536,6 +536,9 @@ func TestRunMarksJobDirtyWhenStartupScanFindsExistingFiles(t *testing.T) {
 		}
 		if gotStableDuration != cfg.StableDuration {
 			t.Fatalf("scanExisting stableDuration = %v, want %v", gotStableDuration, cfg.StableDuration)
+		}
+		if gotPollInterval != cfg.PollInterval {
+			t.Fatalf("scanExisting pollInterval = %v, want %v", gotPollInterval, cfg.PollInterval)
 		}
 		cancel()
 		return 2, nil
@@ -572,7 +575,9 @@ func TestStartupCatchUpQueuesEachLinkedFileIndividually(t *testing.T) {
 	}
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
-	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) { return 0, nil }
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error) {
+		return 0, nil
+	}
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{
 			filepath.Join(linkDir, "movie", "a.mkv"),
@@ -617,7 +622,9 @@ func TestStartupCatchUpMarksJobDirtyWhenLinkDirHasPendingFiles(t *testing.T) {
 	}
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
-	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) { return 0, nil }
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error) {
+		return 0, nil
+	}
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
 	}
@@ -654,7 +661,9 @@ func TestStartupCatchUpRecordsSchedulerEventWhenExistingFilesQueued(t *testing.T
 	}
 	s.mkdirAll = func(string, os.FileMode) error { return nil }
 	s.addWatches = func(string) error { return nil }
-	s.scanExisting = func(context.Context, string, string, []string, time.Duration) (int, error) { return 3, nil }
+	s.scanExisting = func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error) {
+		return 3, nil
+	}
 	s.scanLinkedFiles = func(string, []string) ([]string, error) {
 		return []string{filepath.Join(job.LinkDir, "movie.mkv")}, nil
 	}
@@ -2285,15 +2294,13 @@ func TestReleaseRetriesRecordsRequeueEvent(t *testing.T) {
 		linkPath:   linkPath,
 		remoteDir:  "remote:movie/",
 	}
-	s.scheduler.MarkDirty(linkPath)
-	if !s.scheduler.TryStart(linkPath) {
-		t.Fatal("TryStart() = false, want true")
-	}
-	s.scheduler.FinishFailed(linkPath)
 	s.retryDue[linkPath] = s.currentTime().Add(-time.Second)
 
 	s.releaseRetries()
 
+	if ready := s.scheduler.Ready(); len(ready) != 1 || ready[0] != linkPath {
+		t.Fatalf("Ready() = %v, want [%q] from service-owned retry state", ready, linkPath)
+	}
 	if len(s.recentEvents) != 1 {
 		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
 	}

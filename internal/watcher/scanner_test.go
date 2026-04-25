@@ -118,7 +118,8 @@ func TestScanExistingSkipsWaitForOldFiles(t *testing.T) {
 		return nil
 	}
 
-	count, err := ScanExistingAndLink(sourceDir, linkDir, []string{".mkv"}, stableDuration)
+	pollInterval := 750 * time.Millisecond
+	count, err := ScanExistingAndLinkContext(context.Background(), sourceDir, linkDir, []string{".mkv"}, stableDuration, pollInterval)
 	if err != nil {
 		t.Fatalf("ScanExistingAndLink() error = %v", err)
 	}
@@ -176,7 +177,8 @@ func TestScanExistingWaitsForRecentlyModifiedFiles(t *testing.T) {
 		return nil
 	}
 
-	count, err := ScanExistingAndLink(sourceDir, linkDir, []string{".mkv"}, stableDuration)
+	pollInterval := 750 * time.Millisecond
+	count, err := ScanExistingAndLinkContext(context.Background(), sourceDir, linkDir, []string{".mkv"}, stableDuration, pollInterval)
 	if err != nil {
 		t.Fatalf("ScanExistingAndLink() error = %v", err)
 	}
@@ -193,8 +195,8 @@ func TestScanExistingWaitsForRecentlyModifiedFiles(t *testing.T) {
 	if gotStableFor != stableDuration {
 		t.Fatalf("ScanExistingAndLink() stable duration = %v, want %v", gotStableFor, stableDuration)
 	}
-	if gotPollInterval != time.Millisecond {
-		t.Fatalf("ScanExistingAndLink() poll interval = %v, want %v", gotPollInterval, time.Millisecond)
+	if gotPollInterval != pollInterval {
+		t.Fatalf("ScanExistingAndLink() poll interval = %v, want %v", gotPollInterval, pollInterval)
 	}
 
 	linkedMedia := filepath.Join(linkDir, "movie", "feature.mkv")
@@ -234,7 +236,8 @@ func TestScanAndLinkStillWaitsForStabilityDuration(t *testing.T) {
 		return nil
 	}
 
-	count, err := ScanAndLink(sourceDir, linkDir, []string{".mkv"}, stableDuration)
+	pollInterval := 500 * time.Millisecond
+	count, err := ScanAndLinkContext(context.Background(), sourceDir, linkDir, []string{".mkv"}, stableDuration, pollInterval)
 	if err != nil {
 		t.Fatalf("ScanAndLink() error = %v", err)
 	}
@@ -251,8 +254,8 @@ func TestScanAndLinkStillWaitsForStabilityDuration(t *testing.T) {
 	if gotStableFor != stableDuration {
 		t.Fatalf("ScanAndLink() stable duration = %v, want %v", gotStableFor, stableDuration)
 	}
-	if gotPollInterval != time.Millisecond {
-		t.Fatalf("ScanAndLink() poll interval = %v, want %v", gotPollInterval, time.Millisecond)
+	if gotPollInterval != pollInterval {
+		t.Fatalf("ScanAndLink() poll interval = %v, want %v", gotPollInterval, pollInterval)
 	}
 
 	linkedMedia := filepath.Join(linkDir, "movie", "feature.mkv")

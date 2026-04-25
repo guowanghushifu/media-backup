@@ -13,28 +13,30 @@ var waitForScanStable = func(ctx context.Context, path string, stableFor time.Du
 	return WaitStableContext(ctx, path, stableFor, pollInterval)
 }
 
+const defaultScanPollInterval = time.Second
+
 func ScanAndLink(sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
-	return ScanAndLinkContext(context.Background(), sourceDir, linkDir, extensions, stableDuration)
+	return ScanAndLinkContext(context.Background(), sourceDir, linkDir, extensions, stableDuration, defaultScanPollInterval)
 }
 
-func ScanAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
+func ScanAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration, pollInterval time.Duration) (int, error) {
 	return scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
-		return waitForScanStable(ctx, path, stableDuration, time.Millisecond)
+		return waitForScanStable(ctx, path, stableDuration, pollInterval)
 	})
 }
 
 func ScanExistingAndLink(sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
-	return ScanExistingAndLinkContext(context.Background(), sourceDir, linkDir, extensions, stableDuration)
+	return ScanExistingAndLinkContext(context.Background(), sourceDir, linkDir, extensions, stableDuration, defaultScanPollInterval)
 }
 
-func ScanExistingAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration) (int, error) {
+func ScanExistingAndLinkContext(ctx context.Context, sourceDir, linkDir string, extensions []string, stableDuration time.Duration, pollInterval time.Duration) (int, error) {
 	return scanAndLink(sourceDir, linkDir, extensions, func(path string) error {
 		info, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
 		if stableDuration > 0 && time.Since(info.ModTime()) < stableDuration {
-			err := waitForScanStable(ctx, path, stableDuration, time.Millisecond)
+			err := waitForScanStable(ctx, path, stableDuration, pollInterval)
 			if errors.Is(err, ErrWaitStableTimeout) {
 				return errSkipUnstableFile
 			}

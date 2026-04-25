@@ -2,7 +2,6 @@ package queue_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/guowanghushifu/media-backup/internal/queue"
 )
@@ -10,7 +9,7 @@ import (
 func TestSchedulerDeduplicatesQueuedJob(t *testing.T) {
 	t.Parallel()
 
-	s := queue.New(queue.Options{MaxParallel: 5, RetryInterval: 10 * time.Minute})
+	s := queue.New(queue.Options{MaxParallel: 5})
 	s.MarkDirty("job-a")
 	s.MarkDirty("job-a")
 
@@ -23,7 +22,7 @@ func TestSchedulerDeduplicatesQueuedJob(t *testing.T) {
 func TestSchedulerRespectsPerJobSerialAndGlobalLimit(t *testing.T) {
 	t.Parallel()
 
-	s := queue.New(queue.Options{MaxParallel: 2, RetryInterval: 10 * time.Minute})
+	s := queue.New(queue.Options{MaxParallel: 2})
 	s.MarkDirty("job-a")
 	s.MarkDirty("job-b")
 	s.MarkDirty("job-c")
@@ -43,56 +42,31 @@ func TestSchedulerRespectsPerJobSerialAndGlobalLimit(t *testing.T) {
 	}
 }
 
-func TestSchedulerSchedulesRetryWithoutDuplicateQueueEntries(t *testing.T) {
+func TestSchedulerFinishFailedReleasesSlotWithoutRequeue(t *testing.T) {
 	t.Parallel()
 
-	s := queue.New(queue.Options{MaxParallel: 1, RetryInterval: 10 * time.Minute})
+	s := queue.New(queue.Options{MaxParallel: 1})
 	s.MarkDirty("job-a")
 	if !s.TryStart("job-a") {
 		t.Fatal("expected job-a to start")
 	}
 
 	s.FinishFailed("job-a")
-	s.FinishFailed("job-a")
-
-	retries := s.RetryReady()
-	if len(retries) != 1 || retries[0] != "job-a" {
-		t.Fatalf("RetryReady() = %v, want [job-a]", retries)
-	}
-}
-
-func TestSchedulerFailedJobDirtyBeforeRetryNotReady(t *testing.T) {
-	t.Parallel()
-
-	s := queue.New(queue.Options{MaxParallel: 1, RetryInterval: 10 * time.Minute})
-	s.MarkDirty("job-a")
-	if !s.TryStart("job-a") {
-		t.Fatal("expected job-a to start")
-	}
-
-	s.FinishFailed("job-a")
-	s.MarkDirty("job-a")
 
 	ready := s.Ready()
 	if len(ready) != 0 {
-		t.Fatalf("Ready() = %v, want []", ready)
+		t.Fatalf("Ready() = %v, want [] until service marks retry due", ready)
 	}
-
-	retries := s.RetryReady()
-	if len(retries) != 1 || retries[0] != "job-a" {
-		t.Fatalf("RetryReady() = %v, want [job-a]", retries)
-	}
-
-	ready = s.Ready()
-	if len(ready) != 1 || ready[0] != "job-a" {
-		t.Fatalf("Ready() after RetryReady = %v, want [job-a]", ready)
+	s.MarkDirty("job-b")
+	if !s.TryStart("job-b") {
+		t.Fatal("expected another job to start after failed job releases slot")
 	}
 }
 
 func TestSchedulerFinishWithDirtyTrueRequeuesJob(t *testing.T) {
 	t.Parallel()
 
-	s := queue.New(queue.Options{MaxParallel: 1, RetryInterval: 10 * time.Minute})
+	s := queue.New(queue.Options{MaxParallel: 1})
 	s.MarkDirty("job-a")
 	if !s.TryStart("job-a") {
 		t.Fatal("expected job-a to start")
@@ -109,7 +83,7 @@ func TestSchedulerFinishWithDirtyTrueRequeuesJob(t *testing.T) {
 func TestSchedulerReadyOrderingStable(t *testing.T) {
 	t.Parallel()
 
-	s := queue.New(queue.Options{MaxParallel: 3, RetryInterval: 10 * time.Minute})
+	s := queue.New(queue.Options{MaxParallel: 3})
 	s.MarkDirty("job-a")
 	s.MarkDirty("job-b")
 	s.MarkDirty("job-c")
@@ -123,7 +97,7 @@ func TestSchedulerReadyOrderingStable(t *testing.T) {
 func TestSchedulerForgetDeletesTerminalJobState(t *testing.T) {
 	t.Parallel()
 
-	s := queue.New(queue.Options{MaxParallel: 1, RetryInterval: 10 * time.Minute})
+	s := queue.New(queue.Options{MaxParallel: 1})
 	s.MarkDirty("job-a")
 	if !s.TryStart("job-a") {
 		t.Fatal("expected job-a to start")

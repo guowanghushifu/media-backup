@@ -139,41 +139,6 @@ func TestLinkFileReplacesStaleLinkWhenSourcePathGetsNewInode(t *testing.T) {
 	}
 }
 
-func TestCleanupLinkDirPreservesRoot(t *testing.T) {
-	t.Parallel()
-
-	linkDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(linkDir, "a", "b"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(linkDir, "a", "b", "file.tmp"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("WriteFile nested: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(linkDir, "root.tmp"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("WriteFile root: %v", err)
-	}
-
-	if err := CleanupLinkDir(linkDir); err != nil {
-		t.Fatalf("CleanupLinkDir() error = %v", err)
-	}
-
-	info, err := os.Stat(linkDir)
-	if err != nil {
-		t.Fatalf("Stat root: %v", err)
-	}
-	if !info.IsDir() {
-		t.Fatalf("root path is not directory: mode=%v", info.Mode())
-	}
-
-	entries, err := os.ReadDir(linkDir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("ReadDir() len = %d, want 0", len(entries))
-	}
-}
-
 func TestCleanupLinkedFileRemovesOnlyUploadedFileAndEmptyParents(t *testing.T) {
 	t.Parallel()
 

@@ -1,30 +1,24 @@
 package queue
 
 import (
-	"sort"
 	"sync"
-	"time"
 )
 
 type Options struct {
-	MaxParallel   int
-	RetryInterval time.Duration
+	MaxParallel int
 }
 
 type jobState struct {
-	queued       bool
-	running      bool
-	dirty        bool
-	pendingRetry bool
+	queued  bool
+	running bool
+	dirty   bool
 }
 
 type Scheduler struct {
 	mu          sync.Mutex
 	maxParallel int
-	retryAfter  time.Duration
 	active      int
 	order       []string
-	retries     map[string]struct{}
 	jobs        map[string]*jobState
 }
 
@@ -34,8 +28,6 @@ func New(opts Options) *Scheduler {
 	}
 	return &Scheduler{
 		maxParallel: opts.MaxParallel,
-		retryAfter:  opts.RetryInterval,
-		retries:     map[string]struct{}{},
 		jobs:        map[string]*jobState{},
 	}
 }
@@ -46,9 +38,6 @@ func (s *Scheduler) MarkDirty(job string) {
 
 	state := s.ensure(job)
 	state.dirty = true
-	if state.pendingRetry {
-		return
-	}
 	if !state.queued && !state.running {
 		state.queued = true
 		s.order = append(s.order, job)
@@ -73,14 +62,13 @@ func (s *Scheduler) TryStart(job string) bool {
 	defer s.mu.Unlock()
 
 	state := s.ensure(job)
-	if s.active >= s.maxParallel || state.running || !state.queued || state.pendingRetry {
+	if s.active >= s.maxParallel || state.running || !state.queued {
 		return false
 	}
 
 	state.queued = false
 	state.running = true
 	state.dirty = false
-	delete(s.retries, job)
 	s.active++
 	s.remove(job)
 	return true
@@ -95,7 +83,6 @@ func (s *Scheduler) Finish(job string, dirty bool) {
 		s.active--
 	}
 	state.running = false
-	state.pendingRetry = false
 	if dirty || state.dirty {
 		state.dirty = true
 		if !state.queued {
@@ -115,51 +102,8 @@ func (s *Scheduler) FinishFailed(job string) {
 	}
 	state.running = false
 	state.queued = false
-	state.pendingRetry = true
+	state.dirty = false
 	s.remove(job)
-	s.retries[job] = struct{}{}
-}
-
-func (s *Scheduler) RetryReady() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	out := make([]string, 0, len(s.retries))
-	for job := range s.retries {
-		out = append(out, job)
-	}
-	sort.Strings(out)
-	for _, job := range out {
-		delete(s.retries, job)
-		state := s.ensure(job)
-		state.pendingRetry = false
-		if !state.queued && !state.running {
-			state.queued = true
-			s.order = append(s.order, job)
-		}
-	}
-	return out
-}
-
-func (s *Scheduler) RetryJob(job string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.retries[job]; !ok {
-		return false
-	}
-	delete(s.retries, job)
-	state := s.ensure(job)
-	state.pendingRetry = false
-	if !state.queued && !state.running {
-		state.queued = true
-		s.order = append(s.order, job)
-	}
-	return true
-}
-
-func (s *Scheduler) RetryAfter() time.Duration {
-	return s.retryAfter
 }
 
 func (s *Scheduler) Forget(job string) bool {
@@ -170,12 +114,11 @@ func (s *Scheduler) Forget(job string) bool {
 	if !ok {
 		return false
 	}
-	if state.queued || state.running || state.pendingRetry {
+	if state.queued || state.running {
 		return false
 	}
 
 	delete(s.jobs, job)
-	delete(s.retries, job)
 	s.remove(job)
 	return true
 }

@@ -2,7 +2,6 @@ package ui
 
 import (
 	"strings"
-	"unicode"
 )
 
 const (
@@ -37,11 +36,11 @@ func renderPanel(title string, body []string, totalWidth int, minBodyRows int) [
 	displayTitle := title
 	if maxTitleWidth <= 0 {
 		displayTitle = ""
-	} else if displayWidth(title) > maxTitleWidth {
-		displayTitle = trimDisplay(title, maxTitleWidth)
+	} else if displayColumns(title) > maxTitleWidth {
+		displayTitle = truncateDisplayColumns(title, maxTitleWidth)
 	}
 
-	titleWidth := displayWidth(displayTitle)
+	titleWidth := displayColumns(displayTitle)
 	topFill := totalWidth - titleWidth - 5
 	if topFill < 0 {
 		topFill = 0
@@ -58,9 +57,9 @@ func renderPanel(title string, body []string, totalWidth int, minBodyRows int) [
 }
 
 func panelTotalWidth(title string, body []string) int {
-	width := displayWidth(title) + 5
+	width := displayColumns(title) + 5
 	for _, line := range body {
-		if lineWidth := displayWidth(line) + 4; lineWidth > width {
+		if lineWidth := displayColumns(line) + 4; lineWidth > width {
 			width = lineWidth
 		}
 	}
@@ -91,70 +90,8 @@ func padOrTrimDisplay(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if displayWidth(text) > width {
-		return trimDisplay(text, width)
+	if displayColumns(text) > width {
+		return truncateDisplayColumns(text, width)
 	}
-	return text + strings.Repeat(" ", width-displayWidth(text))
-}
-
-func trimDisplay(text string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if displayWidth(text) <= width {
-		return text
-	}
-	if width <= 3 {
-		return strings.Repeat(".", width)
-	}
-
-	target := width - 3
-	current := 0
-	var b strings.Builder
-	for _, r := range text {
-		rw := 1
-		if isWideRune(r) {
-			rw = 2
-		}
-		if current+rw > target {
-			break
-		}
-		b.WriteRune(r)
-		current += rw
-	}
-	b.WriteString("...")
-	return b.String()
-}
-
-func displayWidth(text string) int {
-	width := 0
-	for _, r := range text {
-		switch {
-		case r == 0:
-			continue
-		case unicode.Is(unicode.Mn, r):
-			continue
-		case isWideRune(r):
-			width += 2
-		default:
-			width++
-		}
-	}
-	return width
-}
-
-func isWideRune(r rune) bool {
-	return r >= 0x1100 && (r <= 0x115f ||
-		r == 0x2329 ||
-		r == 0x232a ||
-		(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
-		(r >= 0xac00 && r <= 0xd7a3) ||
-		(r >= 0xf900 && r <= 0xfaff) ||
-		(r >= 0xfe10 && r <= 0xfe19) ||
-		(r >= 0xfe30 && r <= 0xfe6f) ||
-		(r >= 0xff00 && r <= 0xff60) ||
-		(r >= 0xffe0 && r <= 0xffe6) ||
-		(r >= 0x1f300 && r <= 0x1f64f) ||
-		(r >= 0x1f900 && r <= 0x1f9ff) ||
-		(r >= 0x20000 && r <= 0x3fffd))
+	return text + strings.Repeat(" ", width-displayColumns(text))
 }
