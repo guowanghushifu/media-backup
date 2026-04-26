@@ -32,9 +32,9 @@
 
 ### 3.1 顶层字段
 
-- `poll_interval`：等待文件稳定时的轮询间隔。默认 `1s`。
-- `stable_duration`：文件大小保持不变多久才认为稳定。默认 `1m`；示例配置使用 `30s`。
-- `retry_interval`：上传失败后等待多久再重试。默认 `10m`。
+- `poll_interval`：等待文件稳定时的轮询间隔。默认 `1s`；加载后必须大于 0。
+- `stable_duration`：文件大小保持不变多久才认为稳定。默认 `1m`；示例配置使用 `30s`；加载后必须大于 0。
+- `retry_interval`：上传失败后等待多久再重试。默认 `10m`；加载后必须大于 0。
 - `max_retry_count`：单个文件连续失败次数上限。默认 `0`，表示无限重试；小于 0 会报错。
 - `max_parallel_uploads`：全局最大并发上传数。默认 `5`；调度器中小于等于 0 时会退化为 `1`。
 - `extensions`：允许处理的视频扩展名列表。默认 `.mkv`、`.mp4`、`.m2ts`、`.ts`，加载后统一转小写。
@@ -57,6 +57,8 @@
 
 - `jobs` 不能为空。
 - 每个 job 的 `name`、`source_dir`、`rclone_remote` 都不能为空。
+- 加载配置时会对 `source_dir`、`link_dir` 执行 trim 和 `filepath.Clean`；非空路径必须是绝对路径。
+- `poll_interval`、`stable_duration`、`retry_interval` 加载默认值后必须大于 0。
 - `link_dir` 可以为空；为空时等价于直传源文件模式。
 - `source_dir` 不能重复。
 - 不同 job 的 `source_dir` 不能相互嵌套。
@@ -115,7 +117,7 @@
 
 1. 创建可取消的 `runCtx`。
 2. 启动 UI 循环。UI 会在初始扫描前先进入候补屏幕并渲染一次。
-3. 执行启动准备：创建必要的独立 `link_dir`，并递归为每个 `source_dir` 添加 fsnotify watch。启动准备按 job best-effort 执行：单个 job 的 `link_dir` 创建或 `source_dir` 监控失败时，记录日志和最近事件，并从本轮运行配置中跳过该 job；只要至少一个 job 准备成功，服务继续启动。全部 job 准备失败时，`Run` 返回错误。
+3. 执行启动准备：创建必要的独立 `link_dir`，并递归为每个 `source_dir` 添加 fsnotify watch。任意 job 的 `link_dir` 创建或 `source_dir` 监控失败都会记录日志和最近事件，并使 `Run` 返回错误退出；服务不会在部分 job 失效的情况下静默继续运行。
 4. 启动 `eventLoop` 监听 fsnotify 事件。
 5. 启动 `dispatchLoop` 负责重试释放和上传调度。
 6. 后台等待 `stable_duration` 后执行 `startupCatchUp`，处理启动时已有且足够旧的文件。
@@ -176,15 +178,14 @@
 `watcher.WaitStable` 负责判断文件是否写完：
 
 1. 先读取当前文件大小。
-2. 如果 `stable_duration <= 0`，立即返回成功。
-3. 按 `poll_interval` 周期检查文件大小。
-4. 只要大小变化，就重置稳定开始时间。
-5. 大小持续不变达到 `stable_duration` 后返回成功。
-6. 如果总等待时间超过 24 小时，返回稳定等待超时错误。
-7. 如果服务 context 被取消，立即返回 context 错误。
-8. 检查过程中使用 `os.Lstat`，不会跟随 symlink；如果路径不是普通文件，或 `Lstat` 失败，会返回错误。
+2. 按 `poll_interval` 周期检查文件大小。
+3. 只要大小变化，就重置稳定开始时间。
+4. 大小持续不变达到 `stable_duration` 后返回成功。
+5. 如果总等待时间超过 24 小时，返回稳定等待超时错误。
+6. 如果服务 context 被取消，立即返回 context 错误。
+7. 检查过程中使用 `os.Lstat`，不会跟随 symlink；如果路径不是普通文件，或 `Lstat` 失败，会返回错误。
 
-如果 `poll_interval <= 0`，函数内部会使用 `100ms` 作为兜底值。运行期处理文件时，稳定等待不占用 `processSem`；单个文件持续不稳定超过 24 小时后会记录日志并放弃本次处理。
+配置加载后运行时稳定检测参数会保证为正数；未配置的 0 值会被默认值替换，负数会被拒绝。`WaitStable` 内部仍保留 `poll_interval <= 0` 时使用 `100ms` 的兜底逻辑，供直接调用时防御。运行期处理文件时，稳定等待不占用 `processSem`；单个文件持续不稳定超过 24 小时后会记录日志并放弃本次处理。
 
 ## 10. 上传路径准备
 
@@ -296,8 +297,7 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 
 1. 删除 `retryDue`。
 2. 删除失败计数。
-3. 调用 `scheduler.RetryJob` 将等待状态恢复到可排队状态。
-4. 再执行 `MarkDirty` 确保任务待上传。
+3. 执行 `MarkDirty` 确保任务待上传。
 
 ## 15. 调度器实现
 
@@ -310,21 +310,18 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 - `queued`：是否在队列中等待开始。
 - `running`：是否正在运行。
 - `dirty`：运行期间是否有新变更，需要结束后重新上传。
-- `pendingRetry`：是否处于失败后的重试等待。
 
 调度器自身还维护：
 
 - `maxParallel`：最大并发数。
 - `active`：当前运行数。
 - `order`：待运行 key 的稳定顺序队列。
-- `retries`：重试集合。
 
 ### 15.2 MarkDirty
 
 `MarkDirty(job)` 表示该任务有新内容需要上传：
 
 - 设置 `dirty = true`。
-- 如果任务正在等待重试，则不立即入队。
 - 如果任务既未 queued 也未 running，则加入 `order` 队列。
 - 对同一 key 多次调用会去重。
 
@@ -335,7 +332,7 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 `TryStart(job)` 尝试启动一个任务：
 
 - 如果达到 `maxParallel`，返回 false。
-- 如果任务已经 running、未 queued、或 pendingRetry，返回 false。
+- 如果任务已经 running 或未 queued，返回 false。
 - 成功时：
   - `queued = false`
   - `running = true`
@@ -348,26 +345,21 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 `Finish(job, dirty)` 表示任务运行结束：
 
 - 如果任务 running，减少 `active`。
-- 清除 running 和 pendingRetry。
+- 清除 running。
 - 如果参数 `dirty` 为 true，或运行期间 state.dirty 被重新设置，则重新入队。
 
 这用于处理上传过程中同路径文件更新：旧上传被取消后结束，但 dirty=true 会让新任务继续上传。
 
-### 15.5 FinishFailed / RetryJob
+### 15.5 FinishFailed
 
 `FinishFailed(job)` 表示任务上传失败并进入重试等待：
 
 - 减少 active。
 - 清除 running 和 queued。
-- 设置 `pendingRetry = true`。
 - 从 `order` 移除。
-- 放入 `retries` 集合。
+- 清除 dirty。
 
-`RetryJob(job)` 表示重试时间已到或外部主动释放：
-
-- 必须存在于 `retries` 中才会生效。
-- 清除 `pendingRetry`。
-- 如果未 queued 且未 running，则重新加入 `order`。
+失败后的具体重试时间不由调度器保存，而是由 `Service.retryDue` 管理。重试到期后，Service 调用 `MarkDirty(key)` 重新入队。
 
 ### 15.6 Forget
 
@@ -375,7 +367,6 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 
 - 任务不能 queued。
 - 任务不能 running。
-- 任务不能 pendingRetry。
 
 上传成功且没有新 dirty 状态时，Service 会调用 `Forget` 并从运行时任务表删除任务。
 
@@ -391,8 +382,8 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 `releaseRetries` 会检查 `retryDue`：
 
 - 当前时间达到或超过 due time 的 key 被取出。
-- 调用 `scheduler.RetryJob(key)`。
-- 如果成功，记录“到达重试时间，重新排队”事件。
+- 如果运行时任务仍存在，调用 `scheduler.MarkDirty(key)`。
+- 记录“到达重试时间，重新排队”事件。
 - 唤醒调度器和 UI。
 
 ### 16.2 启动上传

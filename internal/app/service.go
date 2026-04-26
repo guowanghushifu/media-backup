@@ -201,26 +201,19 @@ func (s *Service) Run(ctx context.Context) error {
 
 func (s *Service) prepareStartup() error {
 	errs := make([]error, 0)
-	prepared := 0
 	for _, cfgJob := range s.configJobList() {
 		if !watcher.DirectUpload(cfgJob.SourceDir, cfgJob.LinkDir) {
 			if err := s.mkdirAll(cfgJob.LinkDir, 0o755); err != nil {
 				errs = append(errs, s.recordStartupPrepareError(cfgJob, "创建链接目录", err))
-				delete(s.configJobs, cfgJob.SourceDir)
 				continue
 			}
 		}
 		if err := s.addWatches(cfgJob.SourceDir); err != nil {
 			errs = append(errs, s.recordStartupPrepareError(cfgJob, "添加目录监控", err))
-			delete(s.configJobs, cfgJob.SourceDir)
 			continue
 		}
-		prepared++
 	}
-	if prepared == 0 && len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (s *Service) delayedStartupCatchUp(ctx context.Context) {

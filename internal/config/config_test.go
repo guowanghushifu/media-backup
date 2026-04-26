@@ -134,6 +134,55 @@ jobs:
 	}
 }
 
+func TestLoadConfigRejectsNegativeDurations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		fieldYAML string
+		wantError string
+	}{
+		{
+			name:      "poll interval",
+			fieldYAML: "poll_interval: -1s",
+			wantError: "poll_interval must be greater than 0",
+		},
+		{
+			name:      "stable duration",
+			fieldYAML: "stable_duration: -1s",
+			wantError: "stable_duration must be greater than 0",
+		},
+		{
+			name:      "retry interval",
+			fieldYAML: "retry_interval: -1s",
+			wantError: "retry_interval must be greater than 0",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeTempConfig(t, tc.fieldYAML+`
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatalf("LoadConfig error = nil, want %q", tc.wantError)
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tc.wantError)
+			}
+		})
+	}
+}
+
 func TestLoadConfigAcceptsDisabledTelegramWithoutCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -276,6 +325,73 @@ jobs:
 	}
 	if !strings.Contains(err.Error(), "duplicate source_dir") {
 		t.Fatalf("error = %q, want substring %q", err.Error(), "duplicate source_dir")
+	}
+}
+
+func TestLoadConfigNormalizesJobPaths(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: " /media/movies/ "
+    link_dir: " /links/movies/ "
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if got, want := cfg.Jobs[0].SourceDir, "/media/movies"; got != want {
+		t.Fatalf("SourceDir = %q, want %q", got, want)
+	}
+	if got, want := cfg.Jobs[0].LinkDir, "/links/movies"; got != want {
+		t.Fatalf("LinkDir = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConfigRejectsDuplicateSourceDirAfterCleaning(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: job-a
+    source_dir: /media/shared
+    link_dir: /links/a
+    rclone_remote: remote:a
+  - name: job-b
+    source_dir: /media/shared/
+    link_dir: /links/b
+    rclone_remote: remote:b
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want duplicate source_dir error")
+	}
+	if !strings.Contains(err.Error(), "duplicate source_dir") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "duplicate source_dir")
+	}
+}
+
+func TestLoadConfigRejectsRelativeJobPaths(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+jobs:
+  - name: movies
+    source_dir: relative/source
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want absolute source_dir validation error")
+	}
+	if !strings.Contains(err.Error(), "job source_dir must be absolute") {
+		t.Fatalf("error = %q, want absolute source_dir validation error", err.Error())
 	}
 }
 

@@ -532,7 +532,7 @@ func TestRunDelaysStartupCatchUpUntilStableDuration(t *testing.T) {
 	}
 }
 
-func TestPrepareStartupSkipsFailedJobAndKeepsHealthyJob(t *testing.T) {
+func TestPrepareStartupReturnsErrorWhenAnyJobFails(t *testing.T) {
 	t.Parallel()
 
 	badJob := config.JobConfig{Name: "BAD", SourceDir: "/source/bad", LinkDir: "/link/bad"}
@@ -550,14 +550,15 @@ func TestPrepareStartupSkipsFailedJobAndKeepsHealthyJob(t *testing.T) {
 		return nil
 	}
 
-	if err := s.prepareStartup(); err != nil {
-		t.Fatalf("prepareStartup() error = %v, want nil with one healthy job", err)
+	err := s.prepareStartup()
+	if err == nil {
+		t.Fatal("prepareStartup() error = nil, want failed job error")
 	}
-	if _, ok := s.configJobs[badJob.SourceDir]; ok {
-		t.Fatalf("bad job remains in configJobs after prepare failure")
+	if !strings.Contains(err.Error(), "BAD") {
+		t.Fatalf("prepareStartup() error = %q, want failed job name", err.Error())
 	}
-	if _, ok := s.configJobs[goodJob.SourceDir]; !ok {
-		t.Fatalf("good job missing from configJobs after prepare")
+	if _, ok := s.configJobs[badJob.SourceDir]; !ok {
+		t.Fatalf("bad job was removed from configJobs after prepare failure")
 	}
 	if len(s.recentEvents) == 0 {
 		t.Fatal("recentEvents is empty, want prepare failure event")

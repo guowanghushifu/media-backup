@@ -112,9 +112,23 @@ func normalizeConfig(cfg *Config) {
 	cfg.Proxy.Password = strings.TrimSpace(cfg.Proxy.Password)
 	cfg.Telegram.BotToken = strings.TrimSpace(cfg.Telegram.BotToken)
 	cfg.Telegram.ChatID = strings.TrimSpace(cfg.Telegram.ChatID)
+	for i := range cfg.Jobs {
+		cfg.Jobs[i].SourceDir = normalizeJobPath(cfg.Jobs[i].SourceDir)
+		cfg.Jobs[i].LinkDir = normalizeJobPath(cfg.Jobs[i].LinkDir)
+		cfg.Jobs[i].RcloneRemote = strings.TrimSpace(cfg.Jobs[i].RcloneRemote)
+	}
 }
 
 func validateConfig(cfg *Config) error {
+	if cfg.PollInterval <= 0 {
+		return errors.New("poll_interval must be greater than 0")
+	}
+	if cfg.StableDuration <= 0 {
+		return errors.New("stable_duration must be greater than 0")
+	}
+	if cfg.RetryInterval <= 0 {
+		return errors.New("retry_interval must be greater than 0")
+	}
 	if cfg.MaxRetryCount < 0 {
 		return errors.New("max_retry_count must be greater than or equal to 0")
 	}
@@ -153,6 +167,12 @@ func validateConfig(cfg *Config) error {
 		}
 		if strings.TrimSpace(job.SourceDir) == "" {
 			return errors.New("job source_dir is required")
+		}
+		if !filepath.IsAbs(job.SourceDir) {
+			return fmt.Errorf("job source_dir must be absolute: %s", job.SourceDir)
+		}
+		if strings.TrimSpace(job.LinkDir) != "" && !filepath.IsAbs(job.LinkDir) {
+			return fmt.Errorf("job link_dir must be absolute: %s", job.LinkDir)
 		}
 		if strings.TrimSpace(job.RcloneRemote) == "" {
 			return errors.New("job rclone_remote is required")
@@ -199,6 +219,14 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func normalizeJobPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
 }
 
 func isSeparateLinkDir(job JobConfig) bool {
