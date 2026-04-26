@@ -8,10 +8,11 @@ import (
 
 const (
 	activeJobNameMaxWidth  = 40
-	activeJobProgressWidth = 8
-	activeJobSpeedWidth    = 16
-	activeJobETAWidth      = 13
+	activeJobProgressWidth = 6
+	activeJobSpeedWidth    = 14
+	activeJobETAWidth      = 8
 	activeJobStateWidth    = 6
+	eventTagWidth          = 4
 	minActiveJobRows       = 10
 	minEventRows           = 10
 	minDashboardWidth      = 9
@@ -143,7 +144,7 @@ func formatETA(raw string) string {
 	trimmed := strings.TrimPrefix(raw, "ETA ")
 	d, err := time.ParseDuration(trimmed)
 	if err != nil {
-		return raw
+		return trimmed
 	}
 
 	totalSeconds := int(d.Seconds())
@@ -151,9 +152,9 @@ func formatETA(raw string) string {
 	minutes := (totalSeconds % 3600) / 60
 	seconds := totalSeconds % 60
 	if hours > 0 {
-		return fmt.Sprintf("预计 %02d:%02d:%02d", hours, minutes, seconds)
+		return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 	}
-	return fmt.Sprintf("预计 %02d:%02d", minutes, seconds)
+	return fmt.Sprintf("%02d:%02d", minutes, seconds)
 }
 
 func renderEventsPanel(now time.Time, events []EventRecord) (string, []string) {
@@ -164,7 +165,7 @@ func renderEventsPanel(now time.Time, events []EventRecord) (string, []string) {
 	rows := make([]string, 0, len(events))
 	for _, event := range events {
 		tag, message := classifyEvent(event.Message)
-		rows = append(rows, fmt.Sprintf("%s  %s  %s", formatEventTime(now, event.At), padDisplayCell(tag, 6), message))
+		rows = append(rows, fmt.Sprintf("%s  %s  %s", formatEventTime(now, event.At), padDisplayCell(tag, eventTagWidth), message))
 	}
 	return fmt.Sprintf("最近事件 (%d)", len(events)), rows
 }

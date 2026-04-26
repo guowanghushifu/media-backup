@@ -78,9 +78,9 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
-		"│ │ 名称                   进度      速度              预计           状态   │ │",
-		"│ │ job-a                  83%       29.793 MiB/s      预计 00:05     传输中 │ │",
-		"│ │ job-b                  31%       48.2 MiB/s        预计 09:12     传输中 │ │",
+		"│ │ 名称                            进度    速度            预计      状态   │ │",
+		"│ │ job-a                           83%     29.793 MiB/s    00:05     传输中 │ │",
+		"│ │ job-b                           31%     48.2 MiB/s      09:12     传输中 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -91,8 +91,8 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 最近事件 (2) ───────────────────────────────────────────────────────────┐ │",
-		"│ │ 15:04:03  完成    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
-		"│ │ 15:03:58  完成    THIS_IS_TEST/file-01.mkv: Copied (new)                 │ │",
+		"│ │ 15:04:03  完成  THIS_IS_TEST/file-02.mkv: Copied (new)                   │ │",
+		"│ │ 15:03:58  完成  THIS_IS_TEST/file-01.mkv: Copied (new)                   │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -152,7 +152,7 @@ func TestRenderDashboardIdleIncludesRecentEvents(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 最近事件 (1) ───────────────────────────────────────────────────────────┐ │",
-		"│ │ 15:04:03  完成    THIS_IS_TEST/file-02.mkv: Copied (new)                 │ │",
+		"│ │ 15:04:03  完成  THIS_IS_TEST/file-02.mkv: Copied (new)                   │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -237,8 +237,8 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
-		"│ │ 名称                   进度      速度              预计           状态   │ │",
-		"│ │ job-a                  83%       29.793 MiB/s      预计 00:05     传输中 │ │",
+		"│ │ 名称                            进度    速度            预计      状态   │ │",
+		"│ │ job-a                           83%     29.793 MiB/s    00:05     传输中 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -339,7 +339,7 @@ func TestRenderDashboardShowsMetricSummaryAndStructuredJobs(t *testing.T) {
 		"movies-a",
 		"83%",
 		"29.8 MiB/s",
-		"预计 00:05",
+		"00:05",
 		"anime-b",
 		"等待中",
 	} {
@@ -462,7 +462,7 @@ func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "动漫-b") {
 			got := strings.TrimRight(stripNestedFrameLine(line), " ")
-			want := "动漫-b                 83%       29.8 MiB/s        预计 00:05     传输中"
+			want := "动漫-b                          83%     29.8 MiB/s      00:05     传输中"
 			if got != want {
 				t.Fatalf("wide-character row = %q, want %q", got, want)
 			}
@@ -487,8 +487,68 @@ func TestRenderDashboardFormatsHourETAInStructuredJobs(t *testing.T) {
 		5,
 	)
 
-	if !strings.Contains(out, "预计 01:02:03") {
+	if !strings.Contains(out, "01:02:03") {
 		t.Fatalf("RenderDashboard() missing hour ETA format in %q", out)
+	}
+}
+
+func TestRenderDashboardUsesCompactActiveJobColumns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		[]ui.JobStatus{
+			{Name: "job-a", Summary: "832 MiB / 1000 MiB, 83%, 29.793 MiB/s, ETA 5s"},
+		},
+		nil,
+		0,
+		5,
+	)
+
+	var header string
+	var row string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "名称") && strings.Contains(line, "进度") && strings.Contains(line, "状态") {
+			header = stripNestedFrameLine(line)
+			continue
+		}
+		if strings.Contains(line, "job-a") {
+			row = stripNestedFrameLine(line)
+		}
+	}
+	if header == "" || row == "" {
+		t.Fatalf("RenderDashboard() missing active job table in %q", out)
+	}
+
+	wantStarts := []int{0, 32, 40, 56, 66}
+	if got := columnStarts(header); !equalInts(got, wantStarts) {
+		t.Fatalf("active job header columns = %v, want %v in %q", got, wantStarts, header)
+	}
+	if got := columnStarts(row); !equalInts(got, wantStarts) {
+		t.Fatalf("active job row columns = %v, want %v in %q", got, wantStarts, row)
+	}
+	if strings.Contains(row, "预计 00:05") || !strings.Contains(row, "00:05") {
+		t.Fatalf("active job row ETA = %q, want compact time without repeated label", row)
+	}
+}
+
+func TestRenderDashboardFormatsHourETAWithoutRepeatedLabel(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
+	out := ui.RenderDashboard(
+		now,
+		[]ui.JobStatus{
+			{Name: "movie-a", Summary: "832 MiB / 1.0 GiB, 83%, 29.8 MiB/s, ETA 1h2m3s"},
+		},
+		nil,
+		0,
+		5,
+	)
+
+	if strings.Contains(out, "预计 01:02:03") || !strings.Contains(out, "01:02:03") {
+		t.Fatalf("RenderDashboard() hour ETA = %q, want compact time without repeated label", out)
 	}
 }
 
@@ -574,7 +634,7 @@ func TestRenderDashboardTruncatesLongJobNamesWithoutShiftingColumns(t *testing.T
 		t.Fatalf("RenderDashboard() did not render expected rows in %q", out)
 	}
 
-	if !strings.Contains(rows[0], "VERY-LONG-TV-SHOW-...") {
+	if !strings.Contains(rows[0], "VERY-LONG-TV-SHOW-S01E02-10...") {
 		t.Fatalf("long-name row = %q, want truncated name", rows[0])
 	}
 	if strings.Contains(rows[0], "VERY-LONG-TV-SHOW-S01E02-1080P-WEB") {
@@ -904,6 +964,18 @@ func columnStarts(line string) []int {
 	}
 
 	return starts
+}
+
+func equalInts(a []int, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func displayWidth(text string) int {
