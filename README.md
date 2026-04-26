@@ -39,6 +39,8 @@ cp configs/config.example.yaml config.yaml
 - `rclone_remote`：rclone 上传目标目录。
 - `delete_source_after_upload`：上传成功后是否删除源文件。
 
+注意：`source_dir` 不要指向正在下载的目录，需要指向已经下载完成的目录。
+
 程序默认读取可执行文件同目录的 `config.yaml`，也可以启动时指定：
 
 ```bash
