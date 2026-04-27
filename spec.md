@@ -415,7 +415,6 @@ rclone copy <uploadPath> <remoteDirWithTrailingSlash> <rclone_args...>
 - stdout 和 stderr 都会被逐行扫描。
 - 每一行输出都写入日志。
 - 统计行会更新 UI 的任务摘要。
-- “Copied (...)” 事件会加入最近事件。
 - 如果启用代理，会给 rclone 子进程附加 `HTTP_PROXY`、`HTTPS_PROXY`、`http_proxy`、`https_proxy` 环境变量。
 
 ### 17.2 成功路径
@@ -499,10 +498,6 @@ UI 会把 summary 按 `, ` 拆分，并从中提取：
 - 进度：第 2 段。
 - 速度：第 3 段。
 - ETA：第 4 段，会将 `ETA 1m2s` 这类 Go duration 转换为中文“预计 MM:SS”或“预计 HH:MM:SS”。
-
-### 19.3 完成事件
-
-`ParseEvent` 判断 payload 是否包含 `Copied (`。匹配到时会作为最近事件展示。
 
 ## 20. 代理支持
 
@@ -596,7 +591,6 @@ Service 内部维护 `recentEvents`：
 - 上传失败，进入重试等待。
 - 上传失败，达到最大重试次数，停止重试。
 - 上传完成，任务清空/保留。
-- rclone 输出的 `Copied (...)` 事件。
 
 ## 24. 并发与一致性设计
 
@@ -708,5 +702,5 @@ jobs:
 - 程序重启后，独立 `link_dir` 模式会扫描 `link_dir`，这些遗留硬链接会再次注册为待上传任务；直传源文件模式会通过源目录扫描重新注册源文件。
 - `link_dir` 为空或等于 `source_dir` 时是合法的直传源文件模式；`link_dir` 位于 `source_dir` 内部但不相等、不同行 job 的 `source_dir` 与非空 `link_dir` 交叉嵌套，都是非法配置。
 - Telegram 通知只在达到最大重试次数时发送；普通重试失败不发送。
-- rclone 输出解析依赖 `INFO  :`、`ETA`、`Copied (` 等文本特征，rclone 输出格式变化可能影响 UI 展示，但不影响上传命令本身。
+- rclone 输出解析依赖 `INFO  :` 和 `ETA` 等文本特征，rclone 输出格式变化可能影响 UI 展示，但不影响上传命令本身。
 - 代理配置会同时用于 rclone 子进程和 Telegram HTTP client；其中 rclone 通过环境变量使用代理，Telegram 通过 HTTP transport 使用代理。

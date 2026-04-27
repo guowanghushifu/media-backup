@@ -62,35 +62,3 @@ func TestParseInfoPayload(t *testing.T) {
 		t.Fatalf("ParseInfoPayload() = %q, want %q", got, want)
 	}
 }
-
-func TestParseEvent(t *testing.T) {
-	t.Parallel()
-
-	got, ok := ParseEvent("2026/04/22 17:04:17 INFO  : THIS_IS_TEST/uploadtest.bin: Copied (new)")
-	if !ok {
-		t.Fatal("ParseEvent ok = false, want true")
-	}
-	want := "THIS_IS_TEST/uploadtest.bin: Copied (new)"
-	if got != want {
-		t.Fatalf("ParseEvent() = %q, want %q", got, want)
-	}
-}
-
-func TestParseEventRejectsNoise(t *testing.T) {
-	t.Parallel()
-
-	lines := []string{
-		"2026/04/22 17:04:18 INFO  : THIS_IS_TEST: Set directory modification time (using DirSetModTime)",
-		"2026/04/22 17:04:18 INFO  : 1000 MiB / 1000 MiB, 100%, 27.235 MiB/s, ETA 0s",
-	}
-
-	for _, line := range lines {
-		got, ok := ParseEvent(line)
-		if ok {
-			t.Fatalf("ParseEvent ok = true, want false (got %q)", got)
-		}
-		if got != "" {
-			t.Fatalf("ParseEvent() = %q, want empty string", got)
-		}
-	}
-}

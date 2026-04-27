@@ -1146,10 +1146,6 @@ func (s *Service) handleRcloneOutputLine(job *jobRuntime, line string, now func(
 		job.summary = stats
 		s.mu.Unlock()
 		s.signalUIWake()
-		return
-	}
-	if payload, ok := rclone.ParseEvent(line); ok {
-		s.appendRecentEventNow(payload, now)
 	}
 }
 

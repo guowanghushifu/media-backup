@@ -31,14 +31,3 @@ func ParseInfoPayload(line string) (string, bool) {
 	}
 	return payload, true
 }
-
-func ParseEvent(line string) (string, bool) {
-	payload, ok := ParseInfoPayload(line)
-	if !ok {
-		return "", false
-	}
-	if strings.Contains(payload, "Copied (") {
-		return payload, true
-	}
-	return "", false
-}

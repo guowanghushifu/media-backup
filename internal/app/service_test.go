@@ -222,10 +222,9 @@ func TestAppendRecentEventKeepsOnlyLatestTen(t *testing.T) {
 	}
 }
 
-func TestHandleRcloneOutputLineRecordsParsedTransferEvent(t *testing.T) {
+func TestHandleRcloneOutputLineSkipsCopiedTransferEvents(t *testing.T) {
 	t.Parallel()
 
-	at := time.Date(2026, 4, 22, 17, 4, 17, 0, time.UTC)
 	s := newTestService()
 	job := &jobRuntime{
 		cfg:        config.JobConfig{Name: "movie"},
@@ -236,17 +235,12 @@ func TestHandleRcloneOutputLineRecordsParsedTransferEvent(t *testing.T) {
 	}
 
 	s.handleRcloneOutputLine(job, "2026/04/22 17:04:17 INFO  : THIS_IS_TEST/uploadtest.bin: Copied (new)", func() time.Time {
-		return at
+		t.Fatal("now() should not be called for skipped copied transfer events")
+		return time.Time{}
 	})
 
-	if len(s.recentEvents) != 1 {
-		t.Fatalf("len(recentEvents) = %d, want 1", len(s.recentEvents))
-	}
-	if s.recentEvents[0].at != at {
-		t.Fatalf("recentEvents[0].at = %v, want %v", s.recentEvents[0].at, at)
-	}
-	if s.recentEvents[0].message != "THIS_IS_TEST/uploadtest.bin: Copied (new)" {
-		t.Fatalf("recentEvents[0].message = %q, want copied event", s.recentEvents[0].message)
+	if len(s.recentEvents) != 0 {
+		t.Fatalf("len(recentEvents) = %d, want 0", len(s.recentEvents))
 	}
 }
 
@@ -2742,17 +2736,13 @@ func TestRunUploadBindsRcloneOutputToJob(t *testing.T) {
 
 	s.runUpload(context.Background(), job)
 
-	if len(s.recentEvents) < 1 {
-		t.Fatalf("len(recentEvents) = %d, want at least 1", len(s.recentEvents))
-	}
-	found := false
 	for _, event := range s.recentEvents {
 		if event.message == "nested/file.mkv: Copied (new)" {
-			found = true
+			t.Fatalf("recentEvents = %#v, want rclone copied event to be skipped", s.recentEvents)
 		}
 	}
-	if !found {
-		t.Fatalf("recentEvents = %#v, want bound rclone event on target job", s.recentEvents)
+	if len(s.recentEvents) == 0 {
+		t.Fatalf("len(recentEvents) = %d, want upload completion event", len(s.recentEvents))
 	}
 }
 
