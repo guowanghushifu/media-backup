@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	activeJobNameMaxWidth  = 40
-	activeJobProgressWidth = 6
+	activeJobNameMaxWidth  = 60
+	activeJobProgressWidth = 4
 	activeJobSpeedWidth    = 14
 	activeJobETAWidth      = 8
 	activeJobStateWidth    = 6

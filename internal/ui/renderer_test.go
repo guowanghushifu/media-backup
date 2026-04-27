@@ -78,9 +78,9 @@ func TestRenderActiveDashboard(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
-		"│ │ 名称                            进度    速度            预计      状态   │ │",
-		"│ │ job-a                           83%     29.793 MiB/s    00:05     传输中 │ │",
-		"│ │ job-b                           31%     48.2 MiB/s      09:12     传输中 │ │",
+		"│ │ 名称                              进度  速度            预计      状态   │ │",
+		"│ │ job-a                             83%   29.793 MiB/s    00:05     传输中 │ │",
+		"│ │ job-b                             31%   48.2 MiB/s      09:12     传输中 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -237,8 +237,8 @@ func TestRenderDashboardShowsPlaceholderWhenNoEvents(t *testing.T) {
 		"│ └──────────────────────────────────────────────────────────────────────────┘ │",
 		"│                                                                              │",
 		"│ ┌─ 活动任务 ───────────────────────────────────────────────────────────────┐ │",
-		"│ │ 名称                            进度    速度            预计      状态   │ │",
-		"│ │ job-a                           83%     29.793 MiB/s    00:05     传输中 │ │",
+		"│ │ 名称                              进度  速度            预计      状态   │ │",
+		"│ │ job-a                             83%   29.793 MiB/s    00:05     传输中 │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
 		"│ │                                                                          │ │",
@@ -462,7 +462,7 @@ func TestRenderDashboardAlignsWideCharacterJobNames(t *testing.T) {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "动漫-b") {
 			got := strings.TrimRight(stripNestedFrameLine(line), " ")
-			want := "动漫-b                          83%     29.8 MiB/s      00:05     传输中"
+			want := "动漫-b                            83%   29.8 MiB/s      00:05     传输中"
 			if got != want {
 				t.Fatalf("wide-character row = %q, want %q", got, want)
 			}
@@ -521,7 +521,7 @@ func TestRenderDashboardUsesCompactActiveJobColumns(t *testing.T) {
 		t.Fatalf("RenderDashboard() missing active job table in %q", out)
 	}
 
-	wantStarts := []int{0, 32, 40, 56, 66}
+	wantStarts := []int{0, 34, 40, 56, 66}
 	if got := columnStarts(header); !equalInts(got, wantStarts) {
 		t.Fatalf("active job header columns = %v, want %v in %q", got, wantStarts, header)
 	}
@@ -634,7 +634,7 @@ func TestRenderDashboardTruncatesLongJobNamesWithoutShiftingColumns(t *testing.T
 		t.Fatalf("RenderDashboard() did not render expected rows in %q", out)
 	}
 
-	if !strings.Contains(rows[0], "VERY-LONG-TV-SHOW-S01E02-10...") {
+	if !strings.Contains(rows[0], "VERY-LONG-TV-SHOW-S01E02-1080...") {
 		t.Fatalf("long-name row = %q, want truncated name", rows[0])
 	}
 	if strings.Contains(rows[0], "VERY-LONG-TV-SHOW-S01E02-1080P-WEB") {
@@ -659,7 +659,7 @@ func TestRenderDashboardTruncatesActiveFileNamesByDisplayWidth(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
-	longName := "中文剧集名称合集S01E02-1080p-WEB-DL-Group.mkv"
+	longName := "中文剧集名称合集S01E02-1080p-WEB-DL-Group-Extra-Long-Release-Name.mkv"
 	out := ui.RenderDashboardWithWidth(
 		now,
 		[]ui.JobStatus{
@@ -682,20 +682,20 @@ func TestRenderDashboardTruncatesActiveFileNamesByDisplayWidth(t *testing.T) {
 		t.Fatalf("RenderDashboard() missing active job row in %q", out)
 	}
 
-	wantName := trimDisplayToWidth(longName, 40)
+	wantName := trimDisplayToWidth(longName, 60)
 	if !strings.Contains(row, wantName) {
-		t.Fatalf("active row = %q, want 40-column display truncation %q", row, wantName)
+		t.Fatalf("active row = %q, want 60-column display truncation %q", row, wantName)
 	}
-	if strings.Contains(row, "1080p-WEB-DL-Group.mkv") {
+	if strings.Contains(row, "Extra-Long-Release-Name.mkv") {
 		t.Fatalf("active row = %q, want tail to be truncated", row)
 	}
 }
 
-func TestRenderDashboardTruncatesMixedWidthActiveNamesToFortyColumnsAndKeepsAlignment(t *testing.T) {
+func TestRenderDashboardTruncatesMixedWidthActiveNamesToSixtyColumnsAndKeepsAlignment(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
-	longMixedName := "电影Movie合集01-特别篇-1080p-Group-Extra-Cut.mkv"
+	longMixedName := "电影Movie合集01-特别篇-1080p-Group-Extra-Cut-Extended-Release-Name.mkv"
 	out := ui.RenderDashboardWithWidth(
 		now,
 		[]ui.JobStatus{
@@ -729,12 +729,12 @@ func TestRenderDashboardTruncatesMixedWidthActiveNamesToFortyColumnsAndKeepsAlig
 		t.Fatalf("RenderDashboard() did not render expected active job rows in %q", out)
 	}
 
-	wantName := trimDisplayToWidth(longMixedName, 40)
+	wantName := trimDisplayToWidth(longMixedName, 60)
 	if !strings.Contains(mixedRow, wantName) {
-		t.Fatalf("mixed-width row = %q, want 40-column truncated name %q", mixedRow, wantName)
+		t.Fatalf("mixed-width row = %q, want 60-column truncated name %q", mixedRow, wantName)
 	}
-	if got := displayWidth(firstColumn(header, mixedRow)); got != 40 {
-		t.Fatalf("mixed-width name cell width = %d, want 40 in %q", got, mixedRow)
+	if got := displayWidth(firstColumn(header, mixedRow)); got != 60 {
+		t.Fatalf("mixed-width name cell width = %d, want 60 in %q", got, mixedRow)
 	}
 
 	headerStarts := columnStarts(header)
@@ -755,7 +755,7 @@ func TestRenderDashboardTruncatesDecomposedUnicodeNamesWithoutShiftingColumns(t 
 	t.Parallel()
 
 	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
-	longDecomposedName := "Cafe\u0301-archive-episode-01-special-edition-directors-cut.mkv"
+	longDecomposedName := "Cafe\u0301-archive-episode-01-special-edition-directors-cut-extended-release-name.mkv"
 	out := ui.RenderDashboardWithWidth(
 		now,
 		[]ui.JobStatus{
@@ -789,12 +789,12 @@ func TestRenderDashboardTruncatesDecomposedUnicodeNamesWithoutShiftingColumns(t 
 		t.Fatalf("RenderDashboard() did not render expected active job rows in %q", out)
 	}
 
-	wantName := trimDisplayToWidth(longDecomposedName, 40)
+	wantName := trimDisplayToWidth(longDecomposedName, 60)
 	if !strings.Contains(decomposedRow, wantName) {
 		t.Fatalf("decomposed row = %q, want truncated name %q", decomposedRow, wantName)
 	}
-	if got := displayWidth(firstColumn(header, decomposedRow)); got != 40 {
-		t.Fatalf("decomposed name cell width = %d, want 40 in %q", got, decomposedRow)
+	if got := displayWidth(firstColumn(header, decomposedRow)); got != 60 {
+		t.Fatalf("decomposed name cell width = %d, want 60 in %q", got, decomposedRow)
 	}
 
 	headerStarts := columnStarts(header)
@@ -811,11 +811,11 @@ func TestRenderDashboardTruncatesDecomposedUnicodeNamesWithoutShiftingColumns(t 
 	}
 }
 
-func TestRenderDashboardTruncatesAllCJKNamesAtFortyColumnsWithoutShiftingColumns(t *testing.T) {
+func TestRenderDashboardTruncatesAllCJKNamesAtSixtyColumnsWithoutShiftingColumns(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC)
-	longCJKName := strings.Repeat("影", 21)
+	longCJKName := strings.Repeat("影", 31)
 	out := ui.RenderDashboardWithWidth(
 		now,
 		[]ui.JobStatus{
@@ -849,7 +849,7 @@ func TestRenderDashboardTruncatesAllCJKNamesAtFortyColumnsWithoutShiftingColumns
 		t.Fatalf("RenderDashboard() did not render expected active job rows in %q", out)
 	}
 
-	wantName := trimDisplayToWidth(longCJKName, 40)
+	wantName := trimDisplayToWidth(longCJKName, 60)
 	if !strings.Contains(cjkRow, wantName) {
 		t.Fatalf("all-CJK row = %q, want truncated name %q", cjkRow, wantName)
 	}
