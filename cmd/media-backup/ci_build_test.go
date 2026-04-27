@@ -84,6 +84,9 @@ func TestCIBuildCreatesVersionedArchivesWithExpectedContents(t *testing.T) {
 	if _, ok := amd64Entries["run-forever.sh"]; !ok {
 		t.Fatalf("amd64 archive entries = %#v, want run-forever script", amd64Entries)
 	}
+	if _, ok := amd64Entries["configs/config.example.yaml"]; !ok {
+		t.Fatalf("amd64 archive entries = %#v, want example config", amd64Entries)
+	}
 	if _, ok := amd64Entries["media-backup-linux-arm64"]; ok {
 		t.Fatalf("amd64 archive entries = %#v, want no arm64 binary", amd64Entries)
 	}
@@ -106,6 +109,9 @@ func TestCIBuildCreatesVersionedArchivesWithExpectedContents(t *testing.T) {
 	}
 	if _, ok := arm64Entries["run-forever.sh"]; !ok {
 		t.Fatalf("arm64 archive entries = %#v, want run-forever script", arm64Entries)
+	}
+	if _, ok := arm64Entries["configs/config.example.yaml"]; !ok {
+		t.Fatalf("arm64 archive entries = %#v, want example config", arm64Entries)
 	}
 	if _, ok := arm64Entries["media-backup-linux-amd64"]; ok {
 		t.Fatalf("arm64 archive entries = %#v, want no amd64 binary", arm64Entries)
@@ -146,6 +152,16 @@ func TestCIBuildWithDefaultDistKeepsRunForeverInArchives(t *testing.T) {
 			t.Fatalf("WriteFile(%q) error = %v", name, err)
 		}
 	}
+	if err := os.MkdirAll(filepath.Join(tempRepo, "configs"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(configs) error = %v", err)
+	}
+	configContents, err := os.ReadFile(filepath.Join(repoRoot, "configs", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config.example.yaml) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempRepo, "configs", "config.example.yaml"), configContents, 0o644); err != nil {
+		t.Fatalf("WriteFile(config.example.yaml) error = %v", err)
+	}
 
 	fakeGo := writeFakeGo(t, tempRepo)
 	cmd := exec.Command("bash", filepath.Join(tempRepo, "ci_build.sh"))
@@ -165,6 +181,9 @@ func TestCIBuildWithDefaultDistKeepsRunForeverInArchives(t *testing.T) {
 	entries := archiveEntries(t, filepath.Join(tempRepo, "dist", "media-backup_0.3.0_linux_amd64.tar.gz"))
 	if _, ok := entries["run-forever.sh"]; !ok {
 		t.Fatalf("archive entries = %#v, want run-forever script", entries)
+	}
+	if _, ok := entries["configs/config.example.yaml"]; !ok {
+		t.Fatalf("archive entries = %#v, want example config", entries)
 	}
 }
 
