@@ -91,7 +91,7 @@ func padOrTrimDisplay(text string, width int) string {
 		return ""
 	}
 	if displayColumns(text) > width {
-		return truncateDisplayColumns(text, width)
+		return fitDisplayColumns(truncateDisplayColumns(text, width), width)
 	}
 	return text + strings.Repeat(" ", width-displayColumns(text))
 }

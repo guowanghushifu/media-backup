@@ -938,6 +938,40 @@ func TestRenderDashboardTruncatesLongEventToRequestedWidth(t *testing.T) {
 	}
 }
 
+func TestRenderDashboardPadsTruncatedWideEventsToRequestedWidth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 27, 20, 30, 0, 0, time.UTC)
+	events := []ui.EventRecord{
+		{
+			At:      time.Date(2026, 4, 27, 20, 26, 0, 0, time.UTC),
+			Message: "[4K-REMUX] 复仇者联盟3：无限战争 (2018) {tmdb-299536} - 2160p.BluRay.HDR.DV.HEVC.TrueHD.Atmos.7.1-ROBOT.mkv｜上传完成，任务清空",
+		},
+		{
+			At:      time.Date(2026, 4, 27, 20, 14, 0, 0, time.UTC),
+			Message: "[MOVIE] 复仇者联盟3：无限战争 (2018) {tmdb-299536} - 2160p.BluRay.HDR.DV.x265.DDP.7.1-BBR.mkv｜检测到新文件，任务标记为待上传",
+		},
+		{
+			At:      time.Date(2026, 4, 27, 19, 4, 0, 0, time.UTC),
+			Message: "[MOVIE] 复仇者联盟2：奥创纪元 (2015) {tmdb-99861} - 2160p.BluRay.HDR.DV.x265.DDP.7.1-BBR.mkv｜检测到新文件，任务标记为待上传",
+		},
+		{
+			At:      time.Date(2026, 4, 27, 16, 46, 0, 0, time.UTC),
+			Message: "[4K-REMUX] 复仇者联盟2：奥创纪元 (2015) {tmdb-99861} - 2160p.BluRay.HDR.DV.HEVC.TrueHD.Atmos.7.1-ROBOT.mkv｜上传完成，任务清空",
+		},
+	}
+
+	out := ui.RenderDashboardWithWidth(now, nil, events, 0, 5, 147)
+	for _, line := range strings.Split(out, "\n") {
+		if got := displayWidth(line); got != 147 {
+			t.Fatalf("RenderDashboardWithWidth() line width = %d, want 147 in %q", got, line)
+		}
+		if strings.Contains(line, "04-27") && strings.HasSuffix(line, "│  │") {
+			t.Fatalf("RenderDashboardWithWidth() event line has padded gap between inner and outer borders: %q", line)
+		}
+	}
+}
+
 func columnStarts(line string) []int {
 	starts := []int{0}
 	width := 0
