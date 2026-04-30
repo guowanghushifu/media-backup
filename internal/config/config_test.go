@@ -36,6 +36,9 @@ jobs:
 	if cfg.MaxParallelUploads != 5 {
 		t.Fatalf("MaxParallelUploads = %d, want 5", cfg.MaxParallelUploads)
 	}
+	if cfg.SameRemoteDirStartDelay != 10*time.Second {
+		t.Fatalf("SameRemoteDirStartDelay = %v, want %v", cfg.SameRemoteDirStartDelay, 10*time.Second)
+	}
 
 	wantExtensions := []string{".mkv", ".mp4", ".m2ts", ".ts"}
 	assertEqualStringSlice(t, "Extensions", cfg.Extensions, wantExtensions)
@@ -50,6 +53,48 @@ jobs:
 		"-v",
 	}
 	assertEqualStringSlice(t, "RcloneArgs", cfg.RcloneArgs, wantRcloneArgs)
+}
+
+func TestLoadConfigParsesSameRemoteDirStartDelay(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+same_remote_dir_start_delay: 15s
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.SameRemoteDirStartDelay != 15*time.Second {
+		t.Fatalf("SameRemoteDirStartDelay = %v, want %v", cfg.SameRemoteDirStartDelay, 15*time.Second)
+	}
+}
+
+func TestLoadConfigAllowsZeroSameRemoteDirStartDelay(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, `
+same_remote_dir_start_delay: 0s
+jobs:
+  - name: movies
+    source_dir: /media/movies
+    link_dir: /links/movies
+    rclone_remote: remote:movies
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.SameRemoteDirStartDelay != 0 {
+		t.Fatalf("SameRemoteDirStartDelay = %v, want 0", cfg.SameRemoteDirStartDelay)
+	}
 }
 
 func TestLoadConfigDefaultsMaxRetryCountToZero(t *testing.T) {

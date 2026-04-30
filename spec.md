@@ -37,6 +37,7 @@
 - `retry_interval`：上传失败后等待多久再重试。默认 `10m`；加载后必须大于 0。
 - `max_retry_count`：单个文件连续失败次数上限。默认 `0`，表示无限重试；小于 0 会报错。
 - `max_parallel_uploads`：全局最大并发上传数。默认 `5`；调度器中小于等于 0 时会退化为 `1`。
+- `same_remote_dir_start_delay`：同一远端目录已有上传正在启动/执行时，新任务启动 rclone 前等待多久。默认 `10s`；显式设为 `0s` 时关闭。
 - `extensions`：允许处理的视频扩展名列表。默认 `.mkv`、`.mp4`、`.m2ts`、`.ts`，加载后统一转小写。
 - `rclone_args`：附加到 rclone 命令末尾的参数。为空时使用内置默认参数。
 - `proxy`：rclone 命令和 Telegram 通知使用的 HTTP/HTTPS 代理配置。
@@ -402,6 +403,8 @@ rclone copy <upload_file> <remoteDir>/ <rclone_args...>
 上传由 `runUpload` 和 `copyWithRclone` 完成。
 
 ### 17.1 rclone 调用
+
+`runUpload` 调用 rclone 前会登记当前任务的 `remoteDir`。如果同一个 `remoteDir` 已经有其他上传正在启动或执行，并且 `same_remote_dir_start_delay > 0`，当前任务会先等待该配置指定的时长。等待结束后任务直接继续启动 rclone，不会等待前一个上传完成；不同 `remoteDir` 的任务互不影响。等待期间如果 upload context 被取消，任务不会启动 rclone。
 
 `copyWithRclone` 创建 `rclone.CommandExecutor`，再用 `rclone.Runner.CopyFile` 执行：
 

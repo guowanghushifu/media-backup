@@ -29,39 +29,41 @@ const maxParallelProcessing = 64
 var errUploadSuperseded = errors.New("upload superseded by newer same-path file")
 
 type Service struct {
-	cfg                *config.Config
-	logger             *log.Logger
-	scheduler          *queue.Scheduler
-	watcher            *fsnotify.Watcher
-	uiWriter           io.Writer
-	mkdirAll           func(string, os.FileMode) error
-	addWatches         func(string) error
-	scanExisting       func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error)
-	scanExistingFiles  func(context.Context, string, string, []string, time.Duration, time.Duration) ([]watcher.LinkResult, error)
-	scanLinkedFiles    func(string, []string) ([]string, error)
-	copyJob            func(context.Context, *jobRuntime) error
-	cleanupLinkedFile  func(string, string) error
-	cleanupSourceFile  func(string, string) error
-	validateLinkedFile func(string, string) error
-	waitStable         func(context.Context, string, time.Duration, time.Duration) error
-	startUpload        func(context.Context, *jobRuntime)
-	afterMarkDirty     func(string)
-	beforeProcessFile  func(string)
-	now                func() time.Time
-	uiWidth            func() int
-	notifyFinalFailure func(jobFailureNotification) error
+	cfg                  *config.Config
+	logger               *log.Logger
+	scheduler            *queue.Scheduler
+	watcher              *fsnotify.Watcher
+	uiWriter             io.Writer
+	mkdirAll             func(string, os.FileMode) error
+	addWatches           func(string) error
+	scanExisting         func(context.Context, string, string, []string, time.Duration, time.Duration) (int, error)
+	scanExistingFiles    func(context.Context, string, string, []string, time.Duration, time.Duration) ([]watcher.LinkResult, error)
+	scanLinkedFiles      func(string, []string) ([]string, error)
+	copyJob              func(context.Context, *jobRuntime) error
+	cleanupLinkedFile    func(string, string) error
+	cleanupSourceFile    func(string, string) error
+	validateLinkedFile   func(string, string) error
+	waitStable           func(context.Context, string, time.Duration, time.Duration) error
+	startUpload          func(context.Context, *jobRuntime)
+	afterMarkDirty       func(string)
+	beforeProcessFile    func(string)
+	waitUploadStartDelay func(context.Context, time.Duration) error
+	now                  func() time.Time
+	uiWidth              func() int
+	notifyFinalFailure   func(jobFailureNotification) error
 
-	mu            sync.Mutex
-	completionMu  sync.Mutex
-	configJobs    map[string]config.JobConfig
-	jobs          map[string]*jobRuntime
-	processing    map[string]struct{}
-	recentEvents  []recentEvent
-	retryDue      map[string]time.Time
-	failureCounts map[string]int
-	processSem    chan struct{}
-	wakeCh        chan struct{}
-	uiWakeCh      chan struct{}
+	mu               sync.Mutex
+	completionMu     sync.Mutex
+	configJobs       map[string]config.JobConfig
+	jobs             map[string]*jobRuntime
+	processing       map[string]struct{}
+	recentEvents     []recentEvent
+	retryDue         map[string]time.Time
+	failureCounts    map[string]int
+	remoteDirUploads map[string]int
+	processSem       chan struct{}
+	wakeCh           chan struct{}
+	uiWakeCh         chan struct{}
 }
 
 type uiRenderState struct {
@@ -128,6 +130,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 		processing:         map[string]struct{}{},
 		retryDue:           map[string]time.Time{},
 		failureCounts:      map[string]int{},
+		remoteDirUploads:   map[string]int{},
 		processSem:         make(chan struct{}, maxParallelProcessing),
 		wakeCh:             make(chan struct{}, 1),
 		uiWakeCh:           make(chan struct{}, 1),
@@ -135,6 +138,7 @@ func NewService(cfg *config.Config, logger *log.Logger) (*Service, error) {
 	s.addWatches = s.addRecursiveWatches
 	s.copyJob = s.copyWithRclone
 	s.waitStable = watcher.WaitStableContext
+	s.waitUploadStartDelay = waitContextDuration
 	s.notifyFinalFailure = func(event jobFailureNotification) error {
 		if notifier == nil {
 			return nil
@@ -689,8 +693,21 @@ func (s *Service) startReadyUploads(ctx context.Context) {
 }
 
 func (s *Service) runUpload(ctx context.Context, job *jobRuntime) {
+	releaseRemoteDir, err := s.beforeRcloneStart(ctx, job)
+	if releaseRemoteDir != nil {
+		defer releaseRemoteDir()
+	}
+	if err != nil {
+		if errors.Is(context.Cause(ctx), errUploadSuperseded) {
+			s.finishUploadSuperseded(job)
+			return
+		}
+		s.finishUploadFailure(job, fmt.Sprintf("上传等待失败: %v", err))
+		return
+	}
+
 	s.logRcloneCommand(job)
-	err := s.copyJob(ctx, job)
+	err = s.copyJob(ctx, job)
 	if err != nil {
 		if errors.Is(context.Cause(ctx), errUploadSuperseded) {
 			s.finishUploadSuperseded(job)
@@ -880,6 +897,67 @@ func (s *Service) finishUploadSuperseded(job *jobRuntime) {
 
 	s.scheduler.Finish(job.key, true)
 	s.signalWake()
+}
+
+func (s *Service) beforeRcloneStart(ctx context.Context, job *jobRuntime) (func(), error) {
+	if job == nil || job.remoteDir == "" {
+		return nil, nil
+	}
+
+	needDelay := s.markRemoteDirUploadStarting(job.remoteDir)
+	release := func() {
+		s.markRemoteDirUploadDone(job.remoteDir)
+	}
+	if !needDelay || s.cfg.SameRemoteDirStartDelay <= 0 {
+		return release, nil
+	}
+	if s.waitUploadStartDelay == nil {
+		s.waitUploadStartDelay = waitContextDuration
+	}
+
+	if err := s.waitUploadStartDelay(ctx, s.cfg.SameRemoteDirStartDelay); err != nil {
+		return release, err
+	}
+	return release, nil
+}
+
+func (s *Service) markRemoteDirUploadStarting(remoteDir string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.remoteDirUploads == nil {
+		s.remoteDirUploads = map[string]int{}
+	}
+	needDelay := s.remoteDirUploads[remoteDir] > 0
+	s.remoteDirUploads[remoteDir]++
+	return needDelay
+}
+
+func (s *Service) markRemoteDirUploadDone(remoteDir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.remoteDirUploads == nil {
+		return
+	}
+	count := s.remoteDirUploads[remoteDir]
+	if count <= 1 {
+		delete(s.remoteDirUploads, remoteDir)
+		return
+	}
+	s.remoteDirUploads[remoteDir] = count - 1
+}
+
+func waitContextDuration(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) finishUploadSuccess(job *jobRuntime) {

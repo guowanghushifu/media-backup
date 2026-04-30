@@ -25,6 +25,7 @@ cp configs/config.example.yaml config.yaml
 - `retry_interval`：上传失败后的重试间隔。
 - `max_retry_count`：单个文件最大连续失败次数，`0` 表示无限重试。
 - `max_parallel_uploads`：并发上传任务数量。
+- `same_remote_dir_start_delay`：同一远端目录已有上传正在启动/执行时，新任务启动 rclone 前的等待时间，默认 `10s`，`0s` 表示关闭。
 - `extensions`：需要监控的文件后缀。
 - `rclone_args`：传给 `rclone copy` 的参数。
 - `proxy`：HTTP 代理配置，`enabled: true` 时生效。

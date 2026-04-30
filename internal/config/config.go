@@ -25,16 +25,17 @@ var (
 )
 
 type Config struct {
-	PollInterval       time.Duration  `yaml:"poll_interval"`
-	StableDuration     time.Duration  `yaml:"stable_duration"`
-	RetryInterval      time.Duration  `yaml:"retry_interval"`
-	MaxRetryCount      int            `yaml:"max_retry_count"`
-	MaxParallelUploads int            `yaml:"max_parallel_uploads"`
-	Extensions         []string       `yaml:"extensions"`
-	RcloneArgs         []string       `yaml:"rclone_args"`
-	Proxy              ProxyConfig    `yaml:"proxy"`
-	Telegram           TelegramConfig `yaml:"telegram"`
-	Jobs               []JobConfig    `yaml:"jobs"`
+	PollInterval            time.Duration  `yaml:"poll_interval"`
+	StableDuration          time.Duration  `yaml:"stable_duration"`
+	RetryInterval           time.Duration  `yaml:"retry_interval"`
+	SameRemoteDirStartDelay time.Duration  `yaml:"same_remote_dir_start_delay"`
+	MaxRetryCount           int            `yaml:"max_retry_count"`
+	MaxParallelUploads      int            `yaml:"max_parallel_uploads"`
+	Extensions              []string       `yaml:"extensions"`
+	RcloneArgs              []string       `yaml:"rclone_args"`
+	Proxy                   ProxyConfig    `yaml:"proxy"`
+	Telegram                TelegramConfig `yaml:"telegram"`
+	Jobs                    []JobConfig    `yaml:"jobs"`
 }
 
 type ProxyConfig struct {
@@ -71,7 +72,12 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	applyDefaults(&cfg)
+	keys, err := topLevelYAMLKeys(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	applyDefaults(&cfg, keys)
 	normalizeConfig(&cfg)
 
 	if err := validateConfig(&cfg); err != nil {
@@ -81,7 +87,7 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func applyDefaults(cfg *Config) {
+func applyDefaults(cfg *Config, keys map[string]struct{}) {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = time.Second
 	}
@@ -90,6 +96,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.RetryInterval == 0 {
 		cfg.RetryInterval = 10 * time.Minute
+	}
+	if _, ok := keys["same_remote_dir_start_delay"]; !ok {
+		cfg.SameRemoteDirStartDelay = 10 * time.Second
 	}
 	if cfg.MaxParallelUploads == 0 {
 		cfg.MaxParallelUploads = 5
@@ -100,6 +109,26 @@ func applyDefaults(cfg *Config) {
 	if len(cfg.RcloneArgs) == 0 {
 		cfg.RcloneArgs = append([]string(nil), defaultRcloneArgs...)
 	}
+}
+
+func topLevelYAMLKeys(data []byte) (map[string]struct{}, error) {
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
+		return nil, err
+	}
+
+	keys := map[string]struct{}{}
+	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {
+		return keys, nil
+	}
+	root := node.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return keys, nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		keys[root.Content[i].Value] = struct{}{}
+	}
+	return keys, nil
 }
 
 func normalizeConfig(cfg *Config) {

@@ -1762,6 +1762,255 @@ func TestRunUploadRecordsCompletionAndFailureEvents(t *testing.T) {
 	})
 }
 
+func TestRunUploadDelaysSecondSameRemoteDirBeforeCopy(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.cfg.SameRemoteDirStartDelay = 10 * time.Second
+
+	firstCopyStarted := make(chan struct{})
+	releaseFirstCopy := make(chan struct{})
+	secondCopyStarted := make(chan struct{})
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+
+	s.waitUploadStartDelay = func(ctx context.Context, delay time.Duration) error {
+		if delay != 10*time.Second {
+			t.Errorf("delay = %v, want %v", delay, 10*time.Second)
+		}
+		close(waitStarted)
+		select {
+		case <-releaseWait:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	s.copyJob = func(_ context.Context, job *jobRuntime) error {
+		switch job.key {
+		case "/link/episode1.mkv":
+			close(firstCopyStarted)
+			<-releaseFirstCopy
+		case "/link/episode2.mkv":
+			close(secondCopyStarted)
+		default:
+			t.Fatalf("unexpected copy job key %q", job.key)
+		}
+		return nil
+	}
+
+	first := newRunningUploadTestJob("/link/episode1.mkv", "remote:show/S01/")
+	second := newRunningUploadTestJob("/link/episode2.mkv", "remote:show/S01/")
+	s.jobs[first.key] = first
+	s.jobs[second.key] = second
+	markTestJobRunning(t, s, first.key)
+	markTestJobRunning(t, s, second.key)
+
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		s.runUpload(context.Background(), first)
+	}()
+
+	select {
+	case <-firstCopyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first copy did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		s.runUpload(context.Background(), second)
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second same-directory upload did not wait before copy")
+	}
+
+	select {
+	case <-secondCopyStarted:
+		t.Fatal("second copy started before same-directory delay completed")
+	default:
+	}
+
+	close(releaseWait)
+	select {
+	case <-secondCopyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second copy did not start after same-directory delay")
+	}
+
+	close(releaseFirstCopy)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first upload did not finish")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second upload did not finish")
+	}
+}
+
+func TestRunUploadDoesNotDelayDifferentRemoteDir(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.cfg.SameRemoteDirStartDelay = 10 * time.Second
+
+	firstCopyStarted := make(chan struct{})
+	releaseFirstCopy := make(chan struct{})
+	secondCopyStarted := make(chan struct{})
+
+	s.waitUploadStartDelay = func(context.Context, time.Duration) error {
+		t.Fatal("waitUploadStartDelay called for different remote directories")
+		return nil
+	}
+	s.copyJob = func(_ context.Context, job *jobRuntime) error {
+		switch job.key {
+		case "/link/episode1.mkv":
+			close(firstCopyStarted)
+			<-releaseFirstCopy
+		case "/link/episode2.mkv":
+			close(secondCopyStarted)
+		default:
+			t.Fatalf("unexpected copy job key %q", job.key)
+		}
+		return nil
+	}
+
+	first := newRunningUploadTestJob("/link/episode1.mkv", "remote:show/S01/")
+	second := newRunningUploadTestJob("/link/episode2.mkv", "remote:show/S02/")
+	s.jobs[first.key] = first
+	s.jobs[second.key] = second
+	markTestJobRunning(t, s, first.key)
+	markTestJobRunning(t, s, second.key)
+
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		s.runUpload(context.Background(), first)
+	}()
+
+	select {
+	case <-firstCopyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first copy did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		s.runUpload(context.Background(), second)
+	}()
+
+	select {
+	case <-secondCopyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second different-directory copy did not start promptly")
+	}
+
+	close(releaseFirstCopy)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first upload did not finish")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second upload did not finish")
+	}
+}
+
+func TestRunUploadCancellationDuringSameRemoteDirDelaySkipsCopy(t *testing.T) {
+	t.Parallel()
+
+	s := newTestService()
+	s.cfg.SameRemoteDirStartDelay = 10 * time.Second
+
+	firstCopyStarted := make(chan struct{})
+	releaseFirstCopy := make(chan struct{})
+	waitStarted := make(chan struct{})
+	secondCopyStarted := make(chan struct{}, 1)
+
+	s.waitUploadStartDelay = func(ctx context.Context, delay time.Duration) error {
+		if delay != 10*time.Second {
+			t.Errorf("delay = %v, want %v", delay, 10*time.Second)
+		}
+		close(waitStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	s.copyJob = func(_ context.Context, job *jobRuntime) error {
+		switch job.key {
+		case "/link/episode1.mkv":
+			close(firstCopyStarted)
+			<-releaseFirstCopy
+		case "/link/episode2.mkv":
+			secondCopyStarted <- struct{}{}
+		default:
+			t.Fatalf("unexpected copy job key %q", job.key)
+		}
+		return nil
+	}
+
+	first := newRunningUploadTestJob("/link/episode1.mkv", "remote:show/S01/")
+	second := newRunningUploadTestJob("/link/episode2.mkv", "remote:show/S01/")
+	s.jobs[first.key] = first
+	s.jobs[second.key] = second
+	markTestJobRunning(t, s, first.key)
+	markTestJobRunning(t, s, second.key)
+
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		s.runUpload(context.Background(), first)
+	}()
+
+	select {
+	case <-firstCopyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first copy did not start")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		s.runUpload(ctx, second)
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second same-directory upload did not enter delay")
+	}
+	cancel()
+
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second upload did not finish after cancellation")
+	}
+	select {
+	case <-secondCopyStarted:
+		t.Fatal("second copy started after cancellation during delay")
+	default:
+	}
+
+	close(releaseFirstCopy)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first upload did not finish")
+	}
+}
+
 func TestRunUploadTreatsPostDeleteCleanupErrorAsSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -2910,19 +3159,46 @@ func TestReleaseRetriesDoesNotRecordEventBeforeDueTime(t *testing.T) {
 
 func newTestService() *Service {
 	return &Service{
-		cfg:                &config.Config{MaxParallelUploads: 5},
-		logger:             log.New(io.Discard, "", 0),
-		scheduler:          queue.New(queue.Options{MaxParallel: 5}),
-		configJobs:         map[string]config.JobConfig{},
-		jobs:               map[string]*jobRuntime{},
-		scanLinkedFiles:    func(string, []string) ([]string, error) { return nil, nil },
-		cleanupLinkedFile:  func(string, string) error { return nil },
-		validateLinkedFile: func(string, string) error { return nil },
-		retryDue:           map[string]time.Time{},
-		failureCounts:      map[string]int{},
-		notifyFinalFailure: func(jobFailureNotification) error { return nil },
-		wakeCh:             make(chan struct{}, 1),
-		uiWakeCh:           make(chan struct{}, 1),
+		cfg:                  &config.Config{MaxParallelUploads: 5},
+		logger:               log.New(io.Discard, "", 0),
+		scheduler:            queue.New(queue.Options{MaxParallel: 5}),
+		configJobs:           map[string]config.JobConfig{},
+		jobs:                 map[string]*jobRuntime{},
+		scanLinkedFiles:      func(string, []string) ([]string, error) { return nil, nil },
+		cleanupLinkedFile:    func(string, string) error { return nil },
+		validateLinkedFile:   func(string, string) error { return nil },
+		waitUploadStartDelay: waitContextDuration,
+		retryDue:             map[string]time.Time{},
+		failureCounts:        map[string]int{},
+		remoteDirUploads:     map[string]int{},
+		notifyFinalFailure:   func(jobFailureNotification) error { return nil },
+		wakeCh:               make(chan struct{}, 1),
+		uiWakeCh:             make(chan struct{}, 1),
+	}
+}
+
+func newRunningUploadTestJob(key, remoteDir string) *jobRuntime {
+	return &jobRuntime{
+		cfg: config.JobConfig{
+			Name:         "MOVIE",
+			SourceDir:    "/source",
+			LinkDir:      "/link",
+			RcloneRemote: "remote:show",
+		},
+		key:        key,
+		sourcePath: strings.Replace(key, "/link/", "/source/", 1),
+		linkPath:   key,
+		remoteDir:  remoteDir,
+		active:     true,
+	}
+}
+
+func markTestJobRunning(t *testing.T, s *Service, key string) {
+	t.Helper()
+
+	s.scheduler.MarkDirty(key)
+	if !s.scheduler.TryStart(key) {
+		t.Fatalf("TryStart(%q) = false, want true", key)
 	}
 }
 

@@ -7,6 +7,8 @@ retry_interval: 10m
 max_retry_count: 5
 # rclone并发上传任务数量
 max_parallel_uploads: 5
+# 同一远端目录已有上传正在启动/执行时，新任务等待多久再启动rclone；0s 表示关闭
+same_remote_dir_start_delay: 10s
 # 文件监控后缀列表
 extensions:
   - .mkv
